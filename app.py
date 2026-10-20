@@ -12,14 +12,12 @@ st.title("📈 Quantitative Momentum System")
 # --- LOAD SYMBOLS FROM CSV ---
 @st.cache_data
 def load_symbols():
-    # Check for the exact filename you uploaded, or fallback to 'symbols.csv'
     file_path = "STOCK SYMBOLS (3).csv"
     if not os.path.exists(file_path):
         file_path = "symbols.csv"
         
     if os.path.exists(file_path):
         df_symbols = pd.read_csv(file_path)
-        # Adding '.NS' to all symbols for Yahoo Finance India
         ticker_list = []
         for sym in df_symbols['Symbol'].dropna():
             sym_str = str(sym).strip()
@@ -28,16 +26,14 @@ def load_symbols():
             ticker_list.append(sym_str)
         return ticker_list
     else:
-        st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'. Running with fallback tickers.")
+        st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'.")
         return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"]
 
-# Load Universe
 TICKERS = load_symbols()
-BENCHMARK = "^NSEI" # Nifty 50 index
+BENCHMARK = "^NSEI"
 
 st.sidebar.success(f"✅ Loaded {len(TICKERS)} stocks from CSV")
 
-# Create Tabs
 tab1, tab2 = st.tabs(["🔴 Live Momentum Scanner", "📊 Historical Equity Curve (Backtest)"])
 
 # ==========================================
@@ -48,33 +44,28 @@ with tab1:
     top_n = st.slider("Select Top N Stocks for Portfolio", min_value=3, max_value=20, value=10, key='live_n')
     
     if st.button("Run Live Scanner"):
-        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
+        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks..."):
             end_date = datetime.today()
-            start_date = end_date - timedelta(days=250) # Buffer to ensure 126 trading days
+            start_date = end_date - timedelta(days=250)
             
-            # Download data quietly
             data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
             
             results = []
             for t in TICKERS:
                 if t in data.columns:
                     series = data[t].dropna()
-                    if len(series) >= 126: # Need approx 6 months of data
+                    if len(series) >= 126:
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
                         
-                        # 6 Month Return
+                        # Pure Absolute Momentum (No Volatility Filter)
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
-                        # Annualized Volatility
-                        vol = series.pct_change().dropna().std() * np.sqrt(252) * 100
-                        # Risk Adjusted Momentum
-                        score = roc / vol if vol > 0 else 0
+                        score = roc 
                         
                         results.append({
                             'Stock': t.replace('.NS', ''), 
                             'Current Price (₹)': round(curr_price, 2),
                             '6M Return (%)': round(roc, 2), 
-                            'Volatility (%)': round(vol, 2), 
                             'Momentum Score': round(score, 2)
                         })
             
@@ -84,36 +75,29 @@ with tab1:
                 
                 st.success(f"🏆 Top {top_n} Stocks to Buy & Hold right now:")
                 st.dataframe(df.head(top_n), use_container_width=True)
-                
                 st.info(f"💡 **Action:** Allocate {round(100/top_n, 2)}% of your capital to each of these {top_n} stocks.")
             else:
                 st.error("Not enough data to calculate momentum.")
 
 # ==========================================
-# ==========================================
-# ==========================================
-# ==========================================
 # TAB 2: BACKTEST & EQUITY CURVE
 # ==========================================
 with tab2:
     st.header("Momentum Strategy vs Nifty 50 (Last 3 Years)")
-    st.markdown("Yeh system automatically MTM track karta hai aur har trade ka entry/exit log banata hai.")
     
-    # 3 Columns for UI controls now
     col1, col2, col3 = st.columns(3)
     with col1:
         bt_top_n = st.slider("Stocks to hold in Backtest", min_value=3, max_value=20, value=10, key='bt_n')
     with col2:
         txn_cost_pct = st.number_input("Transaction Cost per Trade (%)", min_value=0.0, max_value=5.0, value=1.0, step=0.1)
     with col3:
-        # Naya Dropdown Quarterly ya Monthly select karne ke liye
-        rebalance_freq = st.selectbox("Rebalance Frequency", ["Monthly", "Quarterly"], help="Quarterly reduces churn and saves transaction costs.")
+        rebalance_freq = st.selectbox("Rebalance Frequency", ["Monthly", "Quarterly"])
     
     if st.button("Run Backtest & Plot Equity Curve"):
-        with st.spinner(f"Simulating {rebalance_freq} rebalancing, calculating CAGR, and tracking holding days. Please wait..."):
+        with st.spinner(f"Simulating {rebalance_freq} rebalancing..."):
             
             end = datetime.today()
-            start = end - timedelta(days=365 * 3.5) # 3 years + 6 months lookback
+            start = end - timedelta(days=365 * 3.5)
             
             all_tickers = TICKERS + [BENCHMARK]
             df_daily = yf.download(all_tickers, start=start, end=end, progress=False)['Close']
@@ -130,15 +114,14 @@ with tab2:
             active_positions = {}
             completed_trades = []
             
-            # Step set karna: Monthly ke liye 1 month jump, Quarterly ke liye 3 months jump
             step = 1 if rebalance_freq == "Monthly" else 3
             
             for i in range(6, len(monthly_dates) - step, step):
                 eval_date = monthly_dates[i]
-                start_lookback = monthly_dates[i-6] # Lookback humesha pichle 6 mahine ka hi rahega
+                start_lookback = monthly_dates[i-6]
                 next_rebalance_date = monthly_dates[i+step]
                 
-                # 1. Calculate Momentum Score
+                # 1. Calculate Pure Momentum Score
                 scores = {}
                 for t in TICKERS:
                     if t in df_daily.columns:
@@ -148,13 +131,10 @@ with tab2:
                         if len(p_eval) > 0 and len(p_start) > 0:
                             curr_price = p_eval.iloc[-1]
                             old_price = p_start.iloc[-1]
-                            roc = (curr_price - old_price) / old_price
                             
-                            past_6m = df_daily[t].loc[start_lookback:eval_date].dropna()
-                            if len(past_6m) > 20:
-                                vol = past_6m.pct_change().std() * np.sqrt(252)
-                                score = roc / vol if vol > 0 else 0
-                                scores[t] = score
+                            # Pure Absolute Momentum Score (No Volatility Filter)
+                            roc = (curr_price - old_price) / old_price
+                            scores[t] = roc
                 
                 if not scores: continue
                 ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
@@ -189,7 +169,7 @@ with tab2:
                         except Exception:
                             pass
 
-                # --- PORTFOLIO MONTHLY/QUARTERLY RETURN LOGIC ---
+                # --- PORTFOLIO RETURN LOGIC ---
                 port_period_ret = 0
                 valid_stocks = 0
                 for t in ranked_stocks:
@@ -222,7 +202,6 @@ with tab2:
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
-            # Close open trades at end of backtest
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
@@ -247,15 +226,14 @@ with tab2:
             # --- RENDER CHARTS AND METRICS ---
             if portfolio_returns and len(dates_tracked) > 1:
                 equity_df = pd.DataFrame(index=dates_tracked)
-                equity_df[f'Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
+                equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
                 equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
                 
                 st.line_chart(equity_df, height=400)
                 
-                final_port_val = equity_df[f'Momentum Strategy (Net)'].iloc[-1]
+                final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 
-                # Accurate CAGR calculation using actual days
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
                 years = days_total / 365.25 if days_total > 0 else 1
                 
