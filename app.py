@@ -240,24 +240,52 @@ with tab2:
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
+                # ---- ADVANCED STATS CALCULATION ----
+                port_series = pd.Series(portfolio_returns)
+                
+                # Sharpe Ratio (Annualized) - Assuming risk-free rate is 0 for simplicity
+                std_dev = port_series.std()
+                periods_per_year = 12 if rebalance_freq == "Monthly" else 4
+                sharpe = (port_series.mean() / std_dev) * np.sqrt(periods_per_year) if std_dev > 0 else 0
+                
+                # Sortino Ratio (Downside Deviation)
+                downside_returns = port_series[port_series < 0]
+                downside_dev = np.sqrt(np.mean(downside_returns**2)) if len(downside_returns) > 0 else 0
+                sortino = (port_series.mean() / downside_dev) * np.sqrt(periods_per_year) if downside_dev > 0 else 0
+                
+                # Max Drawdown
+                cum_returns = (1 + port_series).cumprod()
+                peak = cum_returns.cummax()
+                drawdown = (cum_returns - peak) / peak
+                max_dd = drawdown.min() * 100
+                
+                # Win Rate (Percentage of positive periods)
+                win_rate = (len(port_series[port_series > 0]) / len(port_series)) * 100 if len(port_series) > 0 else 0
+                # ------------------------------------
+                
                 trades_df = pd.DataFrame(completed_trades)
                 
                 if not trades_df.empty:
                     avg_holding_days = int(trades_df['Holding Days'].mean())
-                    avg_trade_ret = trades_df['Net Return (%)'].mean()
                     median_trade_ret = trades_df['Net Return (%)'].median()
                 else:
                     avg_holding_days = 0
-                    avg_trade_ret = 0
                     median_trade_ret = 0
                 
-                st.subheader(f"📊 Key Performance Indicators (KPIs) - {rebalance_freq}")
-                m1, m2, m3, m4, m5 = st.columns(5)
+                # --- UI DISPLAY ---
+                st.subheader(f"📊 Primary KPIs - {rebalance_freq}")
+                m1, m2, m3, m4 = st.columns(4)
                 m1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
                 m2.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
                 m3.metric("⏱️ Avg Hold Days", f"{avg_holding_days}")
-                m4.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
-                m5.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                m4.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                
+                st.subheader("🔬 Advanced Risk Metrics")
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %", help="Largest drop from peak to trough. Lower is better.")
+                r2.metric("🏆 Win Rate", f"{round(win_rate, 2)} %", help="Percentage of periods (months/quarters) that were profitable.")
+                r3.metric("⚖️ Sharpe Ratio", f"{round(sharpe, 2)}", help="Risk-adjusted return. >1 is good, >2 is excellent.")
+                r4.metric("🛡️ Sortino Ratio", f"{round(sortino, 2)}", help="Return relative to downside risk only. Higher is better.")
                 
                 st.markdown("---")
                 st.subheader("📝 Per Script Total Returns & Trade Log")
