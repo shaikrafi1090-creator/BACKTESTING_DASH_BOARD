@@ -47,7 +47,7 @@ with tab1:
     if st.button("Run Live Scanner"):
         with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
             end_date = datetime.today()
-            start_date = end_date - timedelta(days=250) # Buffer for 126 trading days
+            start_date = end_date - timedelta(days=250)
             
             data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
             
@@ -58,8 +58,6 @@ with tab1:
                     if len(series) >= 126: 
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
-                        
-                        # Pure Absolute Momentum 
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
                         
                         results.append({
@@ -84,7 +82,7 @@ with tab1:
 # ==========================================
 with tab2:
     
-    # 5 Columns for Advanced UI Controls
+    # UI Controls
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         bt_top_n = st.slider("Stocks to hold", min_value=3, max_value=20, value=10, key='bt_n')
@@ -93,16 +91,18 @@ with tab2:
     with col3:
         rebalance_freq = st.selectbox("Rebalance", ["Monthly", "Quarterly"])
     with col4:
-        backtest_period = st.selectbox("Test Duration", ["3 Years", "5 Years", "10 Years", "15 Years"], index=3)
+        # NAYA FEATURE: Added "9 Years" to the dropdown
+        backtest_period = st.selectbox("Test Duration", ["3 Years", "5 Years", "9 Years", "10 Years", "15 Years"], index=2)
     with col5:
-        rolling_period = st.selectbox("Rolling Period", ["1 Year", "3 Years", "5 Years"])
+        # NAYA FEATURE: Break down the total period into chunks (e.g., 3-year chunks)
+        chunk_years = st.slider("Split Breakdown (Years)", min_value=1, max_value=5, value=3, help="Splits the total backtest into non-overlapping blocks of N years.")
     
     st.header(f"Momentum Strategy vs Nifty 50 ({backtest_period} Engine)")
     
     if st.button("Run Backtest & Plot Analytics"):
         with st.spinner(f"Simulating {rebalance_freq} rebalancing for the LAST {backtest_period.upper()}. Fetching data..."):
             
-            years_map = {"3 Years": 3, "5 Years": 5, "10 Years": 10, "15 Years": 15}
+            years_map = {"3 Years": 3, "5 Years": 5, "9 Years": 9, "10 Years": 10, "15 Years": 15}
             selected_years = years_map[backtest_period]
             
             end = datetime.today()
@@ -144,7 +144,6 @@ with tab2:
                 if not scores: continue
                 ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
-                # Exits
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
                         try:
@@ -168,7 +167,6 @@ with tab2:
                             pass
                         del active_positions[t]
                 
-                # Entries
                 for t in ranked_stocks:
                     if t not in active_positions:
                         try:
@@ -177,7 +175,6 @@ with tab2:
                         except Exception:
                             pass
 
-                # Monthly Returns
                 port_period_ret = 0
                 valid_stocks = 0
                 for t in ranked_stocks:
@@ -210,7 +207,6 @@ with tab2:
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
-            # Final Close
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
@@ -240,10 +236,8 @@ with tab2:
                 equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
                 equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
                 
-                # Equity Curve Chart (Strategy = Green, Benchmark = Orange)
                 st.line_chart(equity_df, height=400, color=["#00C853", "#FFA500"])
                 
-                # Base Stats
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
@@ -251,7 +245,6 @@ with tab2:
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-                # Drawdown Calculations
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
@@ -260,7 +253,6 @@ with tab2:
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
                 
-                # Trade Stats
                 trades_df = pd.DataFrame(completed_trades)
                 if not trades_df.empty:
                     avg_holding_days = int(trades_df['Holding Days'].mean())
@@ -268,48 +260,59 @@ with tab2:
                     median_trade_ret = trades_df['Net Return (%)'].median()
                     winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
                     win_rate = (len(winning_trades) / len(trades_df)) * 100
-                    best_trade = trades_df['Net Return (%)'].max()
-                    worst_trade = trades_df['Net Return (%)'].min()
                 else:
-                    avg_holding_days = avg_trade_ret = median_trade_ret = 0
-                    win_rate = best_trade = worst_trade = 0
+                    avg_holding_days = avg_trade_ret = median_trade_ret = win_rate = 0
                 
                 # -------------------------------------------------------------
-                # 🔄 ROLLING RETURNS CALCULATION
+                # 🔄 NEW: NON-OVERLAPPING PERIOD ANALYSIS (CHUNK BREAKDOWN)
                 # -------------------------------------------------------------
-                r_years = int(rolling_period.split()[0])
-                periods_per_year = 12 if rebalance_freq == "Monthly" else 4
-                rolling_window = r_years * periods_per_year
-                
                 st.markdown("---")
-                if len(equity_df) > rolling_window:
-                    st.subheader(f"🔄 {rolling_period} Rolling Returns (Strategy vs Nifty)")
-                    
-                    roll_strat = (equity_df['Momentum Strategy (Net)'] / equity_df['Momentum Strategy (Net)'].shift(rolling_window)) - 1
-                    roll_bench = (equity_df['Nifty 50 Benchmark'] / equity_df['Nifty 50 Benchmark'].shift(rolling_window)) - 1
-                    
-                    rolling_df = pd.DataFrame({
-                        f'Strategy {rolling_period} Return (%)': roll_strat * 100,
-                        f'Nifty 50 {rolling_period} Return (%)': roll_bench * 100
-                    }).dropna()
-                    
-                    # Rolling Returns Chart (Strategy = Green, Benchmark = Orange)
-                    st.line_chart(rolling_df, height=300, color=["#00C853", "#FFA500"])
-                    
-                    st_avg_roll = rolling_df.iloc[:, 0].mean()
-                    bench_avg_roll = rolling_df.iloc[:, 1].mean()
-                    st_positive = (rolling_df.iloc[:, 0] > 0).mean() * 100
-                    st_beat_nifty = (rolling_df.iloc[:, 0] > rolling_df.iloc[:, 1]).mean() * 100
-                    
-                    st.markdown(f"**{rolling_period} Rolling Statistics:**")
-                    rc1, rc2, rc3, rc4 = st.columns(4)
-                    rc1.metric(f"📈 Avg {rolling_period} Ret", f"{round(st_avg_roll, 2)} %")
-                    rc2.metric(f"📉 Nifty Avg {rolling_period} Ret", f"{round(bench_avg_roll, 2)} %")
-                    rc3.metric(f"🎯 Win Rate (Positive Returns)", f"{round(st_positive, 2)} %")
-                    rc4.metric(f"🏆 Beaten Nifty (% of times)", f"{round(st_beat_nifty, 2)} %")
-                else:
-                    st.warning(f"⚠️ Your Backtest period ({backtest_period}) is too short to calculate a {rolling_period} rolling return window. Please increase Test Duration or decrease Rolling Period.")
+                st.subheader(f"📅 Non-Overlapping Sub-Period Analysis ({chunk_years}-Year Blocks)")
                 
+                chunk_days = int(chunk_years * 365.25)
+                chunk_data = []
+                start_idx = 0
+                
+                while start_idx < len(equity_df):
+                    start_date = equity_df.index[start_idx]
+                    target_end_date = start_date + timedelta(days=chunk_days)
+                    
+                    chunk_df = equity_df.loc[start_date:target_end_date]
+                    
+                    if len(chunk_df) > 1:
+                        actual_end_date = chunk_df.index[-1]
+                        strat_ret = (chunk_df['Momentum Strategy (Net)'].iloc[-1] / chunk_df['Momentum Strategy (Net)'].iloc[0] - 1) * 100
+                        bench_ret = (chunk_df['Nifty 50 Benchmark'].iloc[-1] / chunk_df['Nifty 50 Benchmark'].iloc[0] - 1) * 100
+                        
+                        strat_peak = chunk_df['Momentum Strategy (Net)'].cummax()
+                        strat_dd = ((chunk_df['Momentum Strategy (Net)'] - strat_peak) / strat_peak).min() * 100
+                        
+                        bench_peak = chunk_df['Nifty 50 Benchmark'].cummax()
+                        bench_dd = ((chunk_df['Nifty 50 Benchmark'] - bench_peak) / bench_peak).min() * 100
+                        
+                        chunk_data.append({
+                            "Time Period": f"{start_date.strftime('%b %Y')} - {actual_end_date.strftime('%b %Y')}",
+                            "Strategy Return (%)": round(strat_ret, 2),
+                            "Nifty 50 Return (%)": round(bench_ret, 2),
+                            "Strategy Max DD (%)": round(strat_dd, 2),
+                            "Nifty Max DD (%)": round(bench_dd, 2)
+                        })
+                        
+                    next_indices = np.where(equity_df.index > target_end_date)[0]
+                    if len(next_indices) > 0:
+                        start_idx = next_indices[0]
+                    else:
+                        break
+                
+                if chunk_data:
+                    chunk_df_final = pd.DataFrame(chunk_data)
+                    # Color formatting for the table
+                    st.dataframe(chunk_df_final.style.highlight_max(subset=['Strategy Return (%)'], color='lightgreen')
+                                                .highlight_min(subset=['Strategy Max DD (%)'], color='lightcoral'), 
+                                 use_container_width=True)
+                else:
+                    st.warning("Data is too short to split into these chunks.")
+
                 st.markdown("---")
                 
                 # --- METRICS UI ---
@@ -320,13 +323,6 @@ with tab2:
                 r1_c3.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
                 r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
                 r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
-                
-                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
-                r2_c1.metric("💰 Avg Return (Trade)", f"{round(avg_trade_ret, 2)} %")
-                r2_c2.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
-                r2_c3.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
-                r2_c4.metric("💔 Worst Trade", f"{round(worst_trade, 2)} %")
-                r2_c5.metric("⚠️ Floating Drawdown", f"{round(drawdown.iloc[-1] * 100, 2)} %")
                 
                 st.markdown("---")
                 st.subheader("📝 Per Script Total Returns & Trade Log")
