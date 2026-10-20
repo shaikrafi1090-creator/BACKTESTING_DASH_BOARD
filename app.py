@@ -247,14 +247,89 @@ with tab2:
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-                # Max Drawdown Calculations
+               # --- DRAWDOWN & RECOVERY (RUNNER-UP) CALCULATIONS ---
+                
+                # Strategy Drawdown Math
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
                 
+                # Calculate Strategy Longest Drawdown Duration (Runner-up)
+                drawdown_duration = []
+                current_duration = 0
+                for dd in drawdown:
+                    if dd < 0:
+                        current_duration += 1
+                    else:
+                        drawdown_duration.append(current_duration)
+                        current_duration = 0
+                longest_dd_duration = max(drawdown_duration) if drawdown_duration else 0
+                
+                # Benchmark (Nifty) Drawdown Math
                 bench_roll_max = equity_df['Nifty 50 Benchmark'].cummax()
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
+                
+                # Calculate Benchmark Longest Drawdown Duration
+                bench_dd_duration = []
+                b_current_duration = 0
+                for dd in bench_drawdown:
+                    if dd < 0:
+                        b_current_duration += 1
+                    else:
+                        bench_dd_duration.append(b_current_duration)
+                        b_current_duration = 0
+                bench_longest_duration = max(bench_dd_duration) if bench_dd_duration else 0
+                
+                # Sharpe Ratio
+                rf_rate = 0.06
+                port_returns_series = pd.Series(portfolio_returns)
+                if port_returns_series.std() != 0:
+                    annual_factor = np.sqrt(12) if rebalance_freq == "Monthly" else np.sqrt(4)
+                    sharpe_ratio = (cagr - rf_rate) / (port_returns_series.std() * annual_factor)
+                else:
+                    sharpe_ratio = 0
+
+                # Trade Stats
+                trades_df = pd.DataFrame(completed_trades)
+                if not trades_df.empty:
+                    avg_holding_days = int(trades_df['Holding Days'].mean())
+                    avg_trade_ret = trades_df['Net Return (%)'].mean()
+                    median_trade_ret = trades_df['Net Return (%)'].median()
+                    winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
+                    win_rate = (len(winning_trades) / len(trades_df)) * 100
+                    best_trade = trades_df['Net Return (%)'].max()
+                    worst_trade = trades_df['Net Return (%)'].min()
+                else:
+                    avg_holding_days = avg_trade_ret = median_trade_ret = 0
+                    win_rate = best_trade = worst_trade = 0
+                
+                # --- DISPLAY 3 ROWS OF ADVANCED ANALYTICS ---
+                st.subheader(f"📈 15-Year Performance Analytics ({rebalance_freq})")
+                
+                st.markdown("**1. Return & Risk Profile**")
+                r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
+                r1_c1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
+                r1_c2.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %")
+                r1_c3.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}")
+                r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
+                r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
+                
+                # NEW ROW: Floating Drawdown & Runner-Up (Recovery)
+                st.markdown("**2. Floating Drawdown & Recovery Time**")
+                rx_c1, rx_c2, rx_c3, rx_c4 = st.columns(4)
+                rx_c1.metric("⏱️ Strategy Recovery", f"{longest_dd_duration} Periods", help="Longest time taken to recover a previous high (Runner-up).")
+                rx_c2.metric("⚠️ Strategy Floating DD", f"{round(drawdown.iloc[-1] * 100, 2)} %", help="Current active drawdown from the last peak.")
+                rx_c3.metric("⏱️ Nifty 50 Recovery", f"{bench_longest_duration} Periods")
+                rx_c4.metric("⚠️ Nifty Floating DD", f"{round(bench_drawdown.iloc[-1] * 100, 2)} %")
+                
+                st.markdown("**3. Trade Execution Stats**")
+                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                r2_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r2_c2.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
+                r2_c3.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                r2_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
+                r2_c5.metric("💔 Worst Trade", f"{round(worst_trade, 2)} %")
                 
                 # Sharpe Ratio
                 rf_rate = 0.06
