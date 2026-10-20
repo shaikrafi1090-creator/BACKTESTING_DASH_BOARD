@@ -295,7 +295,7 @@ with tab2:
                     
                     # Plot Rolling Returns Curve
                  # Same colors yahan bhi apply karenge
-st.line_chart(rolling_df, height=300, color=["#00C853", "#FFA500"])
+                    st.line_chart(rolling_df, height=300, color=["#00C853", "#FFA500"])
                     
                     # Rolling Return Metrics
                     st_avg_roll = rolling_df.iloc[:, 0].mean()
