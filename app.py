@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import os
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Momentum Builder & Backtester", layout="wide")
+st.set_page_config(page_title="Pro Quant Momentum System", layout="wide")
 st.title("📈 Quantitative Momentum System")
 
 # --- LOAD SYMBOLS FROM CSV ---
@@ -26,15 +26,16 @@ def load_symbols():
             ticker_list.append(sym_str)
         return ticker_list
     else:
-        st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'.")
-        return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"]
+        st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'. Running with fallback tickers.")
+        return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "ITC.NS", "LT.NS"]
 
 TICKERS = load_symbols()
-BENCHMARK = "^NSEI"
+BENCHMARK = "^NSEI" # Nifty 50 index
 
 st.sidebar.success(f"✅ Loaded {len(TICKERS)} stocks from CSV")
 
-tab1, tab2 = st.tabs(["🔴 Live Momentum Scanner", "📊 Historical Equity Curve (Backtest)"])
+# Create Tabs
+tab1, tab2 = st.tabs(["🔴 Live Momentum Scanner", "📊 15-Year Backtest & Analytics"])
 
 # ==========================================
 # TAB 1: LIVE SCANNER
@@ -44,9 +45,9 @@ with tab1:
     top_n = st.slider("Select Top N Stocks for Portfolio", min_value=3, max_value=20, value=10, key='live_n')
     
     if st.button("Run Live Scanner"):
-        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks..."):
+        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
             end_date = datetime.today()
-            start_date = end_date - timedelta(days=250)
+            start_date = end_date - timedelta(days=250) # Buffer for 126 trading days (6 Months)
             
             data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
             
@@ -54,13 +55,13 @@ with tab1:
             for t in TICKERS:
                 if t in data.columns:
                     series = data[t].dropna()
-                    if len(series) >= 126:
+                    if len(series) >= 126: 
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
                         
                         # Pure Absolute Momentum (No Volatility Filter)
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
-                        score = roc 
+                        score = roc
                         
                         results.append({
                             'Stock': t.replace('.NS', ''), 
@@ -83,7 +84,7 @@ with tab1:
 # TAB 2: BACKTEST & EQUITY CURVE
 # ==========================================
 with tab2:
-    st.header("Momentum Strategy vs Nifty 50 (Last 3 Years)")
+    st.header("Momentum Strategy vs Nifty 50 (15-Year Engine)")
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -93,15 +94,17 @@ with tab2:
     with col3:
         rebalance_freq = st.selectbox("Rebalance Frequency", ["Monthly", "Quarterly"])
     
-    if st.button("Run Backtest & Plot Equity Curve"):
-        with st.spinner(f"Simulating {rebalance_freq} rebalancing..."):
+    if st.button("Run Backtest & Plot Analytics"):
+        with st.spinner(f"Simulating {rebalance_freq} rebalancing for the LAST 15 YEARS. Fetching heavy data..."):
             
             end = datetime.today()
-            start = end - timedelta(days=365 * 3.5)
+            # 15.5 Years Lookback
+            start = end - timedelta(days=365 * 15.5) 
             
             all_tickers = TICKERS + [BENCHMARK]
             df_daily = yf.download(all_tickers, start=start, end=end, progress=False)['Close']
             
+            # Month-End Resampling
             monthly_dates = df_daily.resample('ME').last().index
             
             portfolio_returns = []
@@ -114,6 +117,7 @@ with tab2:
             active_positions = {}
             completed_trades = []
             
+            # Jump step based on Frequency
             step = 1 if rebalance_freq == "Monthly" else 3
             
             for i in range(6, len(monthly_dates) - step, step):
@@ -131,15 +135,13 @@ with tab2:
                         if len(p_eval) > 0 and len(p_start) > 0:
                             curr_price = p_eval.iloc[-1]
                             old_price = p_start.iloc[-1]
-                            
-                            # Pure Absolute Momentum Score (No Volatility Filter)
                             roc = (curr_price - old_price) / old_price
                             scores[t] = roc
                 
                 if not scores: continue
                 ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
-                # --- TRADE TRACKING LOGIC ---
+                # --- TRADE TRACKING LOGIC (Exits) ---
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
                         try:
@@ -161,6 +163,7 @@ with tab2:
                             pass
                         del active_positions[t]
                 
+                # --- TRADE TRACKING LOGIC (Entries) ---
                 for t in ranked_stocks:
                     if t not in active_positions:
                         try:
@@ -178,6 +181,7 @@ with tab2:
                         sell_price = df_daily[t].loc[:next_rebalance_date].dropna().iloc[-1]
                         gross_ret = (sell_price - buy_price) / buy_price
                         
+                        # Apply transaction charge ONLY if bought recently
                         if t not in previous_ranked_stocks:
                             net_ret = gross_ret - txn_cost_decimal
                         else:
@@ -192,6 +196,7 @@ with tab2:
                     port_period_ret = port_period_ret / valid_stocks
                 portfolio_returns.append(port_period_ret)
                 
+                # Benchmark Returns
                 try:
                     bench_buy = df_daily[BENCHMARK].loc[:eval_date].dropna().iloc[-1]
                     bench_sell = df_daily[BENCHMARK].loc[:next_rebalance_date].dropna().iloc[-1]
@@ -202,6 +207,7 @@ with tab2:
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
+            # Close Open Trades for Metric Calculation
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
@@ -223,7 +229,7 @@ with tab2:
                     except Exception:
                         pass
 
-            # --- RENDER CHARTS AND METRICS ---
+            # --- RENDER CHARTS AND ADVANCED METRICS ---
             if portfolio_returns and len(dates_tracked) > 1:
                 equity_df = pd.DataFrame(index=dates_tracked)
                 equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
@@ -234,62 +240,67 @@ with tab2:
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 
+                # Accurate CAGR
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
                 years = days_total / 365.25 if days_total > 0 else 1
                 
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-                # ---- ADVANCED STATS CALCULATION ----
-                port_series = pd.Series(portfolio_returns)
-                
-                # Sharpe Ratio (Annualized) - Assuming risk-free rate is 0 for simplicity
-                std_dev = port_series.std()
-                periods_per_year = 12 if rebalance_freq == "Monthly" else 4
-                sharpe = (port_series.mean() / std_dev) * np.sqrt(periods_per_year) if std_dev > 0 else 0
-                
-                # Sortino Ratio (Downside Deviation)
-                downside_returns = port_series[port_series < 0]
-                downside_dev = np.sqrt(np.mean(downside_returns**2)) if len(downside_returns) > 0 else 0
-                sortino = (port_series.mean() / downside_dev) * np.sqrt(periods_per_year) if downside_dev > 0 else 0
-                
-                # Max Drawdown
-                cum_returns = (1 + port_series).cumprod()
-                peak = cum_returns.cummax()
-                drawdown = (cum_returns - peak) / peak
+                # Max Drawdown Calculations
+                roll_max = equity_df['Momentum Strategy (Net)'].cummax()
+                drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
                 
-                # Win Rate (Percentage of positive periods)
-                win_rate = (len(port_series[port_series > 0]) / len(port_series)) * 100 if len(port_series) > 0 else 0
-                # ------------------------------------
+                bench_roll_max = equity_df['Nifty 50 Benchmark'].cummax()
+                bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
+                bench_max_dd = bench_drawdown.min() * 100
                 
+                # Sharpe Ratio
+                rf_rate = 0.06
+                port_returns_series = pd.Series(portfolio_returns)
+                if port_returns_series.std() != 0:
+                    annual_factor = np.sqrt(12) if rebalance_freq == "Monthly" else np.sqrt(4)
+                    sharpe_ratio = (cagr - rf_rate) / (port_returns_series.std() * annual_factor)
+                else:
+                    sharpe_ratio = 0
+
+                # Trade Stats
                 trades_df = pd.DataFrame(completed_trades)
-                
                 if not trades_df.empty:
                     avg_holding_days = int(trades_df['Holding Days'].mean())
+                    avg_trade_ret = trades_df['Net Return (%)'].mean()
                     median_trade_ret = trades_df['Net Return (%)'].median()
+                    winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
+                    win_rate = (len(winning_trades) / len(trades_df)) * 100
+                    best_trade = trades_df['Net Return (%)'].max()
+                    worst_trade = trades_df['Net Return (%)'].min()
                 else:
-                    avg_holding_days = 0
-                    median_trade_ret = 0
+                    avg_holding_days = avg_trade_ret = median_trade_ret = 0
+                    win_rate = best_trade = worst_trade = 0
                 
-                # --- UI DISPLAY ---
-                st.subheader(f"📊 Primary KPIs - {rebalance_freq}")
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
-                m2.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
-                m3.metric("⏱️ Avg Hold Days", f"{avg_holding_days}")
-                m4.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                # Display 2 Rows of Analytics
+                st.subheader(f"📈 15-Year Performance Analytics ({rebalance_freq})")
                 
-                st.subheader("🔬 Advanced Risk Metrics")
-                r1, r2, r3, r4 = st.columns(4)
-                r1.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %", help="Largest drop from peak to trough. Lower is better.")
-                r2.metric("🏆 Win Rate", f"{round(win_rate, 2)} %", help="Percentage of periods (months/quarters) that were profitable.")
-                r3.metric("⚖️ Sharpe Ratio", f"{round(sharpe, 2)}", help="Risk-adjusted return. >1 is good, >2 is excellent.")
-                r4.metric("🛡️ Sortino Ratio", f"{round(sortino, 2)}", help="Return relative to downside risk only. Higher is better.")
+                st.markdown("**1. Return & Risk Profile**")
+                r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
+                r1_c1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
+                r1_c2.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %")
+                r1_c3.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}")
+                r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
+                r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
+                
+                st.markdown("**2. Trade Execution Stats**")
+                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                r2_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r2_c2.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
+                r2_c3.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                r2_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
+                r2_c5.metric("💔 Worst Trade", f"{round(worst_trade, 2)} %")
                 
                 st.markdown("---")
                 st.subheader("📝 Per Script Total Returns & Trade Log")
                 with st.expander("Click to View Complete Trade History"):
                     st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
             else:
-                st.error("Backtest failed. Not enough historical data.")
+                st.error("Backtest failed. Not enough historical data. Ensure your CSV contains valid Yahoo Finance tickers.")
