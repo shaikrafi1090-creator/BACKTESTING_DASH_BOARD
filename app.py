@@ -66,7 +66,7 @@ with tab2:
             df_daily = yf.download(all_tickers, start=start, end=end)['Close']
             
             # Resample to get Month-End dates for rebalancing
-            monthly_dates = df_daily.resample('M').last().index
+            monthly_dates = df_daily.resample('ME').last().index
             
             portfolio_returns = []
             benchmark_returns = []
