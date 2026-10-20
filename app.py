@@ -12,7 +12,7 @@ st.title("📈 Quantitative Momentum System")
 # --- LOAD SYMBOLS FROM CSV ---
 @st.cache_data
 def load_symbols():
-    file_path = "STOCK SYMBOLS (1).csv"
+    file_path = "STOCK SYMBOLS (4).csv"
     if not os.path.exists(file_path):
         file_path = "symbols.csv"
         
