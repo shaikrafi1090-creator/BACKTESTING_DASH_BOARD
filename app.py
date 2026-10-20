@@ -47,7 +47,7 @@ with tab1:
     if st.button("Run Live Scanner"):
         with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
             end_date = datetime.today()
-            start_date = end_date - timedelta(days=250) 
+            start_date = end_date - timedelta(days=250) # Buffer for 126 trading days
             
             data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
             
@@ -59,6 +59,7 @@ with tab1:
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
                         
+                        # Pure Absolute Momentum 
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
                         
                         results.append({
@@ -94,7 +95,6 @@ with tab2:
     with col4:
         backtest_period = st.selectbox("Test Duration", ["3 Years", "5 Years", "10 Years", "15 Years"], index=3)
     with col5:
-        # NAYA FEATURE: Rolling Returns Period Option
         rolling_period = st.selectbox("Rolling Period", ["1 Year", "3 Years", "5 Years"])
     
     st.header(f"Momentum Strategy vs Nifty 50 ({backtest_period} Engine)")
@@ -240,7 +240,8 @@ with tab2:
                 equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
                 equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
                 
-                st.line_chart(equity_df, height=400)
+                # Equity Curve Chart (Strategy = Green, Benchmark = Orange)
+                st.line_chart(equity_df, height=400, color=["#00C853", "#FFA500"])
                 
                 # Base Stats
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
@@ -250,7 +251,7 @@ with tab2:
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-                # Drawdown
+                # Drawdown Calculations
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
@@ -284,7 +285,6 @@ with tab2:
                 if len(equity_df) > rolling_window:
                     st.subheader(f"🔄 {rolling_period} Rolling Returns (Strategy vs Nifty)")
                     
-                    # (Current / Price N-periods ago) - 1
                     roll_strat = (equity_df['Momentum Strategy (Net)'] / equity_df['Momentum Strategy (Net)'].shift(rolling_window)) - 1
                     roll_bench = (equity_df['Nifty 50 Benchmark'] / equity_df['Nifty 50 Benchmark'].shift(rolling_window)) - 1
                     
@@ -293,17 +293,12 @@ with tab2:
                         f'Nifty 50 {rolling_period} Return (%)': roll_bench * 100
                     }).dropna()
                     
-                    # Plot Rolling Returns Curve
-                 # Same colors yahan bhi apply karenge
+                    # Rolling Returns Chart (Strategy = Green, Benchmark = Orange)
                     st.line_chart(rolling_df, height=300, color=["#00C853", "#FFA500"])
                     
-                    # Rolling Return Metrics
                     st_avg_roll = rolling_df.iloc[:, 0].mean()
                     bench_avg_roll = rolling_df.iloc[:, 1].mean()
-                    
                     st_positive = (rolling_df.iloc[:, 0] > 0).mean() * 100
-                    bench_positive = (rolling_df.iloc[:, 1] > 0).mean() * 100
-                    
                     st_beat_nifty = (rolling_df.iloc[:, 0] > rolling_df.iloc[:, 1]).mean() * 100
                     
                     st.markdown(f"**{rolling_period} Rolling Statistics:**")
