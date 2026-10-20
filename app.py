@@ -47,7 +47,7 @@ with tab1:
     if st.button("Run Live Scanner"):
         with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
             end_date = datetime.today()
-            start_date = end_date - timedelta(days=250) # Buffer for 126 trading days (6 Months)
+            start_date = end_date - timedelta(days=250) # Buffer for 126 trading days
             
             data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
             
@@ -59,15 +59,14 @@ with tab1:
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
                         
-                        # Pure Absolute Momentum (No Volatility Filter)
+                        # Pure Absolute Momentum 
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
-                        score = roc
                         
                         results.append({
                             'Stock': t.replace('.NS', ''), 
                             'Current Price (₹)': round(curr_price, 2),
                             '6M Return (%)': round(roc, 2), 
-                            'Momentum Score': round(score, 2)
+                            'Momentum Score': round(roc, 2)
                         })
             
             if results:
@@ -98,13 +97,11 @@ with tab2:
         with st.spinner(f"Simulating {rebalance_freq} rebalancing for the LAST 15 YEARS. Fetching heavy data..."):
             
             end = datetime.today()
-            # 15.5 Years Lookback
             start = end - timedelta(days=365 * 15.5) 
             
             all_tickers = TICKERS + [BENCHMARK]
             df_daily = yf.download(all_tickers, start=start, end=end, progress=False)['Close']
             
-            # Month-End Resampling
             monthly_dates = df_daily.resample('ME').last().index
             
             portfolio_returns = []
@@ -117,7 +114,6 @@ with tab2:
             active_positions = {}
             completed_trades = []
             
-            # Jump step based on Frequency
             step = 1 if rebalance_freq == "Monthly" else 3
             
             for i in range(6, len(monthly_dates) - step, step):
@@ -141,7 +137,7 @@ with tab2:
                 if not scores: continue
                 ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
-                # --- TRADE TRACKING LOGIC (Exits) ---
+                # --- TRADE LOGIC (Exits) ---
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
                         try:
@@ -163,7 +159,7 @@ with tab2:
                             pass
                         del active_positions[t]
                 
-                # --- TRADE TRACKING LOGIC (Entries) ---
+                # --- TRADE LOGIC (Entries) ---
                 for t in ranked_stocks:
                     if t not in active_positions:
                         try:
@@ -181,7 +177,6 @@ with tab2:
                         sell_price = df_daily[t].loc[:next_rebalance_date].dropna().iloc[-1]
                         gross_ret = (sell_price - buy_price) / buy_price
                         
-                        # Apply transaction charge ONLY if bought recently
                         if t not in previous_ranked_stocks:
                             net_ret = gross_ret - txn_cost_decimal
                         else:
@@ -196,7 +191,6 @@ with tab2:
                     port_period_ret = port_period_ret / valid_stocks
                 portfolio_returns.append(port_period_ret)
                 
-                # Benchmark Returns
                 try:
                     bench_buy = df_daily[BENCHMARK].loc[:eval_date].dropna().iloc[-1]
                     bench_sell = df_daily[BENCHMARK].loc[:next_rebalance_date].dropna().iloc[-1]
@@ -247,14 +241,12 @@ with tab2:
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-               # --- DRAWDOWN & RECOVERY (RUNNER-UP) CALCULATIONS ---
-                
-                # Strategy Drawdown Math
+                # --- DRAWDOWN & RECOVERY CALCULATIONS ---
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
                 
-                # Calculate Strategy Longest Drawdown Duration (Runner-up)
+                # Recovery Days (Runner-Up) for Strategy
                 drawdown_duration = []
                 current_duration = 0
                 for dd in drawdown:
@@ -265,12 +257,11 @@ with tab2:
                         current_duration = 0
                 longest_dd_duration = max(drawdown_duration) if drawdown_duration else 0
                 
-                # Benchmark (Nifty) Drawdown Math
                 bench_roll_max = equity_df['Nifty 50 Benchmark'].cummax()
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
                 
-                # Calculate Benchmark Longest Drawdown Duration
+                # Recovery Days (Runner-Up) for Benchmark
                 bench_dd_duration = []
                 b_current_duration = 0
                 for dd in bench_drawdown:
@@ -304,7 +295,7 @@ with tab2:
                     avg_holding_days = avg_trade_ret = median_trade_ret = 0
                     win_rate = best_trade = worst_trade = 0
                 
-                # --- DISPLAY 3 ROWS OF ADVANCED ANALYTICS ---
+                # Display 3 Rows of Analytics
                 st.subheader(f"📈 15-Year Performance Analytics ({rebalance_freq})")
                 
                 st.markdown("**1. Return & Risk Profile**")
@@ -315,7 +306,6 @@ with tab2:
                 r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
                 r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
                 
-                # NEW ROW: Floating Drawdown & Runner-Up (Recovery)
                 st.markdown("**2. Floating Drawdown & Recovery Time**")
                 rx_c1, rx_c2, rx_c3, rx_c4 = st.columns(4)
                 rx_c1.metric("⏱️ Strategy Recovery", f"{longest_dd_duration} Periods", help="Longest time taken to recover a previous high (Runner-up).")
@@ -324,48 +314,6 @@ with tab2:
                 rx_c4.metric("⚠️ Nifty Floating DD", f"{round(bench_drawdown.iloc[-1] * 100, 2)} %")
                 
                 st.markdown("**3. Trade Execution Stats**")
-                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
-                r2_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
-                r2_c2.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
-                r2_c3.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
-                r2_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
-                r2_c5.metric("💔 Worst Trade", f"{round(worst_trade, 2)} %")
-                
-                # Sharpe Ratio
-                rf_rate = 0.06
-                port_returns_series = pd.Series(portfolio_returns)
-                if port_returns_series.std() != 0:
-                    annual_factor = np.sqrt(12) if rebalance_freq == "Monthly" else np.sqrt(4)
-                    sharpe_ratio = (cagr - rf_rate) / (port_returns_series.std() * annual_factor)
-                else:
-                    sharpe_ratio = 0
-
-                # Trade Stats
-                trades_df = pd.DataFrame(completed_trades)
-                if not trades_df.empty:
-                    avg_holding_days = int(trades_df['Holding Days'].mean())
-                    avg_trade_ret = trades_df['Net Return (%)'].mean()
-                    median_trade_ret = trades_df['Net Return (%)'].median()
-                    winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
-                    win_rate = (len(winning_trades) / len(trades_df)) * 100
-                    best_trade = trades_df['Net Return (%)'].max()
-                    worst_trade = trades_df['Net Return (%)'].min()
-                else:
-                    avg_holding_days = avg_trade_ret = median_trade_ret = 0
-                    win_rate = best_trade = worst_trade = 0
-                
-                # Display 2 Rows of Analytics
-                st.subheader(f"📈 15-Year Performance Analytics ({rebalance_freq})")
-                
-                st.markdown("**1. Return & Risk Profile**")
-                r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
-                r1_c1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
-                r1_c2.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %")
-                r1_c3.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}")
-                r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
-                r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
-                
-                st.markdown("**2. Trade Execution Stats**")
                 r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
                 r2_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
                 r2_c2.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
