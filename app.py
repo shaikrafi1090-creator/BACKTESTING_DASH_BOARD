@@ -240,13 +240,51 @@ with tab2:
                 except Exception:
                     pass
 
-            # --- RENDER CHARTS AND METRICS ---
+           # --- RENDER CHARTS AND METRICS ---
             if portfolio_returns:
                 equity_df = pd.DataFrame(index=dates_tracked)
                 equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
                 equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
                 
                 st.line_chart(equity_df, height=400)
+                
+                # Calculations for CAGR and Averages
+                final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
+                final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
+                
+                years = len(portfolio_returns) / 12
+                cagr = ((final_port_val / 100) ** (1 / years)) - 1
+                bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
+                
+                trades_df = pd.DataFrame(completed_trades)
+                
+                if not trades_df.empty:
+                    avg_holding_days = int(trades_df['Holding Days'].mean())
+                    avg_trade_ret = trades_df['Net Return (%)'].mean()
+                    # Naya Metric: Median Return calculation
+                    median_trade_ret = trades_df['Net Return (%)'].median()
+                else:
+                    avg_holding_days = 0
+                    avg_trade_ret = 0
+                    median_trade_ret = 0
+                
+                # Display Metrics (Ab 5 metrics hain, isliye 5 columns)
+                st.subheader("📊 Key Performance Indicators (KPIs)")
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
+                m2.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
+                m3.metric("⏱️ Avg Hold Days", f"{avg_holding_days}")
+                m4.metric("💰 Avg Return", f"{round(avg_trade_ret, 2)} %")
+                # Naya Metric column render
+                m5.metric("⚖️ Median Return", f"{round(median_trade_ret, 2)} %")
+                
+                # Display Trade History Table
+                st.markdown("---")
+                st.subheader("📝 Per Script Total Returns & Trade Log")
+                with st.expander("Click to View Complete Trade History"):
+                    st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
+            else:
+                st.error("Backtest failed. Not enough historical data.")
                 
                 # Calculations for CAGR and Averages
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
