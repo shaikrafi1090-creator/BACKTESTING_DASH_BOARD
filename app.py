@@ -91,11 +91,9 @@ with tab2:
     with col3:
         rebalance_freq = st.selectbox("Rebalance", ["Monthly", "Quarterly"])
     with col4:
-        # NAYA FEATURE: Added "9 Years" to the dropdown
         backtest_period = st.selectbox("Test Duration", ["3 Years", "5 Years", "9 Years", "10 Years", "15 Years"], index=2)
     with col5:
-        # NAYA FEATURE: Break down the total period into chunks (e.g., 3-year chunks)
-        chunk_years = st.slider("Split Breakdown (Years)", min_value=1, max_value=5, value=3, help="Splits the total backtest into non-overlapping blocks of N years.")
+        chunk_years = st.slider("Split Breakdown (Yrs)", min_value=1, max_value=5, value=3)
     
     st.header(f"Momentum Strategy vs Nifty 50 ({backtest_period} Engine)")
     
@@ -123,6 +121,7 @@ with tab2:
             completed_trades = []
             
             step = 1 if rebalance_freq == "Monthly" else 3
+            periods_per_year = 12 if rebalance_freq == "Monthly" else 4
             
             for i in range(6, len(monthly_dates) - step, step):
                 eval_date = monthly_dates[i]
@@ -238,6 +237,7 @@ with tab2:
                 
                 st.line_chart(equity_df, height=400, color=["#00C853", "#FFA500"])
                 
+                # Base Metrics
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
@@ -248,23 +248,56 @@ with tab2:
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
+                current_dd = drawdown.iloc[-1] * 100
                 
                 bench_roll_max = equity_df['Nifty 50 Benchmark'].cummax()
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
                 
+                # Risk Ratios (Sharpe & Sortino)
+                rf_rate = 0.06
+                port_returns_series = pd.Series(portfolio_returns)
+                annual_factor = np.sqrt(periods_per_year)
+                
+                std_dev = port_returns_series.std()
+                sharpe_ratio = (cagr - rf_rate) / (std_dev * annual_factor) if std_dev != 0 else 0
+                
+                downside_returns = port_returns_series[port_returns_series < 0]
+                downside_dev = downside_returns.std() * annual_factor
+                sortino_ratio = (cagr - rf_rate) / downside_dev if downside_dev > 0 else 0
+                
+                # Calmar Ratio
+                calmar_ratio = cagr / abs(max_dd / 100) if max_dd != 0 else 0
+                
+                # Advanced Trade Stats
                 trades_df = pd.DataFrame(completed_trades)
                 if not trades_df.empty:
+                    total_trades = len(trades_df)
                     avg_holding_days = int(trades_df['Holding Days'].mean())
                     avg_trade_ret = trades_df['Net Return (%)'].mean()
-                    median_trade_ret = trades_df['Net Return (%)'].median()
+                    
                     winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
-                    win_rate = (len(winning_trades) / len(trades_df)) * 100
+                    losing_trades = trades_df[trades_df['Net Return (%)'] <= 0]
+                    
+                    win_rate = (len(winning_trades) / total_trades) * 100
+                    
+                    avg_win = winning_trades['Net Return (%)'].mean() if not winning_trades.empty else 0
+                    avg_loss = losing_trades['Net Return (%)'].mean() if not losing_trades.empty else 0
+                    
+                    gross_profit = winning_trades['Net Return (%)'].sum()
+                    gross_loss = abs(losing_trades['Net Return (%)'].sum())
+                    
+                    profit_factor = gross_profit / gross_loss if gross_loss != 0 else 0
+                    payoff_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+                    
+                    best_trade = trades_df['Net Return (%)'].max()
+                    worst_trade = trades_df['Net Return (%)'].min()
                 else:
-                    avg_holding_days = avg_trade_ret = median_trade_ret = win_rate = 0
+                    total_trades = avg_holding_days = avg_trade_ret = win_rate = 0
+                    avg_win = avg_loss = profit_factor = payoff_ratio = best_trade = worst_trade = 0
                 
                 # -------------------------------------------------------------
-                # 🔄 NEW: NON-OVERLAPPING PERIOD ANALYSIS (CHUNK BREAKDOWN)
+                # 🔄 NON-OVERLAPPING SUB-PERIOD ANALYSIS
                 # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader(f"📅 Non-Overlapping Sub-Period Analysis ({chunk_years}-Year Blocks)")
@@ -276,19 +309,14 @@ with tab2:
                 while start_idx < len(equity_df):
                     start_date = equity_df.index[start_idx]
                     target_end_date = start_date + timedelta(days=chunk_days)
-                    
                     chunk_df = equity_df.loc[start_date:target_end_date]
                     
                     if len(chunk_df) > 1:
                         actual_end_date = chunk_df.index[-1]
                         strat_ret = (chunk_df['Momentum Strategy (Net)'].iloc[-1] / chunk_df['Momentum Strategy (Net)'].iloc[0] - 1) * 100
                         bench_ret = (chunk_df['Nifty 50 Benchmark'].iloc[-1] / chunk_df['Nifty 50 Benchmark'].iloc[0] - 1) * 100
-                        
-                        strat_peak = chunk_df['Momentum Strategy (Net)'].cummax()
-                        strat_dd = ((chunk_df['Momentum Strategy (Net)'] - strat_peak) / strat_peak).min() * 100
-                        
-                        bench_peak = chunk_df['Nifty 50 Benchmark'].cummax()
-                        bench_dd = ((chunk_df['Nifty 50 Benchmark'] - bench_peak) / bench_peak).min() * 100
+                        strat_dd = ((chunk_df['Momentum Strategy (Net)'] - chunk_df['Momentum Strategy (Net)'].cummax()) / chunk_df['Momentum Strategy (Net)'].cummax()).min() * 100
+                        bench_dd = ((chunk_df['Nifty 50 Benchmark'] - chunk_df['Nifty 50 Benchmark'].cummax()) / chunk_df['Nifty 50 Benchmark'].cummax()).min() * 100
                         
                         chunk_data.append({
                             "Time Period": f"{start_date.strftime('%b %Y')} - {actual_end_date.strftime('%b %Y')}",
@@ -306,23 +334,43 @@ with tab2:
                 
                 if chunk_data:
                     chunk_df_final = pd.DataFrame(chunk_data)
-                    # Color formatting for the table
                     st.dataframe(chunk_df_final.style.highlight_max(subset=['Strategy Return (%)'], color='lightgreen')
                                                 .highlight_min(subset=['Strategy Max DD (%)'], color='lightcoral'), 
                                  use_container_width=True)
-                else:
-                    st.warning("Data is too short to split into these chunks.")
-
+                
                 st.markdown("---")
                 
-                # --- METRICS UI ---
+                # -------------------------------------------------------------
+                # 📊 ADVANCED ANALYTICS DASHBOARD
+                # -------------------------------------------------------------
                 st.subheader(f"📈 Core Performance Analytics")
+                
+                # Row 1: Return & Risk Profile
+                st.markdown("**1. Return & Core Risk**")
                 r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
                 r1_c1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
-                r1_c2.metric("📉 Max Drawdown", f"{round(max_dd, 2)} %")
-                r1_c3.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r1_c2.metric("📉 Strategy Max DD", f"{round(max_dd, 2)} %")
+                r1_c3.metric("⚠️ Floating Drawdown", f"{round(current_dd, 2)} %")
                 r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
                 r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
+                
+                # Row 2: Advanced Quant Ratios
+                st.markdown("**2. Advanced Quant Ratios**")
+                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                r2_c1.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}", help="Risk-adjusted return (Higher is better).")
+                r2_c2.metric("🟢 Sortino Ratio", f"{round(sortino_ratio, 2)}", help="Downside risk-adjusted return (Good > 1.5).")
+                r2_c3.metric("🛡️ Calmar Ratio", f"{round(calmar_ratio, 2)}", help="CAGR / Max Drawdown (Good > 1.0).")
+                r2_c4.metric("⚖️ Payoff Ratio", f"{round(payoff_ratio, 2)}", help="Average Win / Average Loss (Reward to Risk).")
+                r2_c5.metric("💰 Profit Factor", f"{round(profit_factor, 2)}", help="Gross Profit / Gross Loss (Good > 1.5).")
+
+                # Row 3: Trade Execution Stats
+                st.markdown("**3. Trade Execution Stats**")
+                r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
+                r3_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r3_c2.metric("📈 Avg Win", f"+{round(avg_win, 2)} %")
+                r3_c3.metric("📉 Avg Loss", f"{round(avg_loss, 2)} %")
+                r3_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
+                r3_c5.metric("🔄 Total Trades", f"{total_trades}")
                 
                 st.markdown("---")
                 st.subheader("📝 Per Script Total Returns & Trade Log")
