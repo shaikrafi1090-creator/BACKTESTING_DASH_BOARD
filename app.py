@@ -12,7 +12,7 @@ st.title("📈 Quantitative Momentum System")
 # --- LOAD SYMBOLS FROM CSV ---
 @st.cache_data
 def load_symbols():
-    file_path = "STOCK SYMBOLS (4).csv"
+    file_path = "STOCK SYMBOLS (1).csv"
     if not os.path.exists(file_path):
         file_path = "symbols.csv"
         
@@ -59,7 +59,6 @@ with tab1:
                         curr_price = series.iloc[-1]
                         price_6m_ago = series.iloc[-126]
                         
-                        # Pure Absolute Momentum 
                         roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
                         
                         results.append({
@@ -151,7 +150,9 @@ with tab2:
                             completed_trades.append({
                                 'Stock': t,
                                 'Entry Date': entry_date.strftime('%Y-%m-%d'),
+                                'Entry Price (₹)': round(entry_price, 2),
                                 'Exit Date': eval_date.strftime('%Y-%m-%d'),
+                                'Exit Price (₹)': round(exit_price, 2),
                                 'Holding Days': days_held,
                                 'Net Return (%)': round(net_ret * 100, 2)
                             })
@@ -216,7 +217,9 @@ with tab2:
                         completed_trades.append({
                             'Stock': t,
                             'Entry Date': entry_date.strftime('%Y-%m-%d'),
+                            'Entry Price (₹)': round(entry_price, 2),
                             'Exit Date': final_date.strftime('%Y-%m-%d') + " (Active)",
+                            'Exit Price (₹)': round(exit_price, 2),
                             'Holding Days': days_held,
                             'Net Return (%)': round(net_ret * 100, 2)
                         })
@@ -234,19 +237,16 @@ with tab2:
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 
-                # Accurate CAGR
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
                 years = days_total / 365.25 if days_total > 0 else 1
                 
                 cagr = ((final_port_val / 100) ** (1 / years)) - 1
                 bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
                 
-                # --- DRAWDOWN & RECOVERY CALCULATIONS ---
                 roll_max = equity_df['Momentum Strategy (Net)'].cummax()
                 drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
                 max_dd = drawdown.min() * 100
                 
-                # Recovery Days (Runner-Up) for Strategy
                 drawdown_duration = []
                 current_duration = 0
                 for dd in drawdown:
@@ -261,7 +261,6 @@ with tab2:
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
                 
-                # Recovery Days (Runner-Up) for Benchmark
                 bench_dd_duration = []
                 b_current_duration = 0
                 for dd in bench_drawdown:
@@ -272,7 +271,6 @@ with tab2:
                         b_current_duration = 0
                 bench_longest_duration = max(bench_dd_duration) if bench_dd_duration else 0
                 
-                # Sharpe Ratio
                 rf_rate = 0.06
                 port_returns_series = pd.Series(portfolio_returns)
                 if port_returns_series.std() != 0:
@@ -281,7 +279,6 @@ with tab2:
                 else:
                     sharpe_ratio = 0
 
-                # Trade Stats
                 trades_df = pd.DataFrame(completed_trades)
                 if not trades_df.empty:
                     avg_holding_days = int(trades_df['Holding Days'].mean())
@@ -295,7 +292,6 @@ with tab2:
                     avg_holding_days = avg_trade_ret = median_trade_ret = 0
                     win_rate = best_trade = worst_trade = 0
                 
-                # Display 3 Rows of Analytics
                 st.subheader(f"📈 15-Year Performance Analytics ({rebalance_freq})")
                 
                 st.markdown("**1. Return & Risk Profile**")
@@ -324,6 +320,7 @@ with tab2:
                 st.markdown("---")
                 st.subheader("📝 Per Script Total Returns & Trade Log")
                 with st.expander("Click to View Complete Trade History"):
+                    # Ab Entry Price aur Exit Price automatically is table mein dikhenge
                     st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
             else:
                 st.error("Backtest failed. Not enough historical data. Ensure your CSV contains valid Yahoo Finance tickers.")
