@@ -361,4 +361,22 @@ with tab2:
                 r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
                 r2_c1.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}", help="Risk-adjusted return (Higher is better).")
                 r2_c2.metric("🟢 Sortino Ratio", f"{round(sortino_ratio, 2)}", help="Downside risk-adjusted return (Good > 1.5).")
-                r2_c3.metric("🛡️ Calmar Ratio", f"{round(calmar_ratio, 2)}", help="CAGR / Max Drawdown
+                r2_c3.metric("🛡️ Calmar Ratio", f"{round(calmar_ratio, 2)}", help="CAGR / Max Drawdown (Good > 1.0).")
+                r2_c4.metric("⚖️ Payoff Ratio", f"{round(payoff_ratio, 2)}", help="Average Win / Average Loss (Reward to Risk).")
+                r2_c5.metric("💰 Profit Factor", f"{round(profit_factor, 2)}", help="Gross Profit / Gross Loss (Good > 1.5).")
+
+                # Row 3: Trade Execution Stats
+                st.markdown("**3. Trade Execution Stats**")
+                r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
+                r3_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r3_c2.metric("📈 Avg Win", f"+{round(avg_win, 2)} %")
+                r3_c3.metric("📉 Avg Loss", f"{round(avg_loss, 2)} %")
+                r3_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
+                r3_c5.metric("🔄 Total Trades", f"{total_trades}")
+                
+                st.markdown("---")
+                st.subheader("📝 Per Script Total Returns & Trade Log")
+                with st.expander("Click to View Complete Trade History"):
+                    st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
+            else:
+                st.error("Backtest failed. Not enough historical data.")
