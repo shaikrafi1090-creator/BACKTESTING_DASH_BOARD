@@ -321,11 +321,8 @@ with tab2:
                     return (np.prod(1 + rets) - 1) * 100
                 heat_pivot['YTD'] = heat_pivot.apply(calc_ytd, axis=1)
                 
-              # ... previous code
-                heat_pivot['YTD'] = heat_pivot.apply(calc_ytd, axis=1)
-                
-                # Make sure this is aligned perfectly with heat_pivot above
-                st.dataframe(heat_pivot.style.format("{:.2f}"), use_container_width=True)
+                st.dataframe(heat_pivot.style.background_gradient(cmap='RdYlGn', axis=None, vmin=-15, vmax=15).format("{:.2f}"), use_container_width=True)
+
                 st.markdown("---")
                 # -------------------------------------------------------------
                 # 📊 ADVANCED ANALYTICS DASHBOARD
