@@ -78,6 +78,7 @@ with tab1:
                 st.error("Not enough data to calculate momentum.")
 
 # ==========================================
+# ==========================================
 # TAB 2: BACKTEST & EQUITY CURVE
 # ==========================================
 with tab2:
@@ -94,7 +95,7 @@ with tab2:
     with col5:
         chunk_years = st.slider("Split Breakdown (Yrs)", min_value=1, max_value=5, value=3)
 
-    # NEW: Advanced Strategy Overlays
+    # Advanced Strategy Overlays
     col6, col7 = st.columns(2)
     with col6:
         use_regime_filter = st.checkbox("🛡️ Enable Market Regime Filter (Exit to Cash if Nifty < 200 DMA)", value=True)
@@ -109,14 +110,12 @@ with tab2:
             years_map = {"3 Years": 3, "5 Years": 5, "9 Years": 9, "10 Years": 10, "15 Years": 15}
             selected_years = years_map[backtest_period]
             
-            # Fetch extra data for the 200 DMA calculation
             end = datetime.today()
             start = end - timedelta(days=(365 * selected_years) + 365) 
             
             all_tickers = TICKERS + [BENCHMARK]
             df_daily = yf.download(all_tickers, start=start, end=end, progress=False)['Close']
             
-            # Calculate Nifty 200 DMA
             if BENCHMARK in df_daily.columns:
                 df_daily['NIFTY_200_DMA'] = df_daily[BENCHMARK].rolling(window=200).mean()
             
@@ -134,8 +133,6 @@ with tab2:
             
             step = 1 if rebalance_freq == "Monthly" else 3
             periods_per_year = 12 if rebalance_freq == "Monthly" else 4
-            
-            # Start loop after 200 days to ensure DMA is populated
             start_index = 12 
             
             for i in range(start_index, len(monthly_dates) - step, step):
@@ -143,7 +140,6 @@ with tab2:
                 start_lookback = monthly_dates[i-6]
                 next_rebalance_date = monthly_dates[i+step]
                 
-                # --- MARKET REGIME FILTER LOGIC ---
                 is_bull_regime = True
                 if use_regime_filter:
                     try:
@@ -172,7 +168,6 @@ with tab2:
                     if scores:
                         ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
-                # Close positions no longer in top N (or if in Bear Regime)
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
                         try:
@@ -196,7 +191,6 @@ with tab2:
                             pass
                         del active_positions[t]
                 
-                # Open new positions
                 for t in ranked_stocks:
                     if t not in active_positions:
                         try:
@@ -205,7 +199,6 @@ with tab2:
                         except Exception:
                             pass
 
-                # Calculate Portfolio Return for the Period
                 port_period_ret = 0
                 if is_bull_regime:
                     valid_stocks = 0
@@ -228,7 +221,6 @@ with tab2:
                     if valid_stocks > 0:
                         port_period_ret = port_period_ret / valid_stocks
                 else:
-                    # Bear Regime: Portfolio is in Cash
                     port_period_ret = cash_yield_monthly * step
 
                 portfolio_returns.append(port_period_ret)
@@ -243,7 +235,6 @@ with tab2:
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
-            # --- CLOSE FINAL POSITIONS ---
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
@@ -273,9 +264,9 @@ with tab2:
                 equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
                 equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
                 
+                st.subheader("📈 Cumulative Equity Curve")
                 st.line_chart(equity_df, height=400, color=["#00C853", "#FFA500"])
                 
-                # Base Metrics
                 final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
                 final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
                 days_total = (dates_tracked[-1] - dates_tracked[0]).days
@@ -292,7 +283,6 @@ with tab2:
                 bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
                 bench_max_dd = bench_drawdown.min() * 100
                 
-                # Risk Ratios (Sharpe & Sortino)
                 rf_rate = 0.06
                 port_returns_series = pd.Series(portfolio_returns)
                 benchmark_returns_series = pd.Series(benchmark_returns)
@@ -307,7 +297,6 @@ with tab2:
                 
                 calmar_ratio = cagr / abs(max_dd / 100) if max_dd != 0 else 0
                 
-                # === NEW ADVANCED QUANT METRICS ===
                 cov_matrix = np.cov(port_returns_series, benchmark_returns_series)
                 beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] != 0 else 0
                 alpha = cagr - (rf_rate + beta * (bench_cagr - rf_rate))
@@ -318,7 +307,6 @@ with tab2:
                 
                 ulcer_index = np.sqrt((drawdown**2).mean()) * 100
                 
-                # Trade Stats
                 trades_df = pd.DataFrame(completed_trades)
                 if not trades_df.empty:
                     total_trades = len(trades_df)
@@ -343,7 +331,6 @@ with tab2:
                     
                     expectancy = (win_rate / 100 * avg_win) - ((1 - win_rate / 100) * abs(avg_loss))
                     
-                    # Kelly Criterion Calculation
                     if win_rate > 0 and payoff_ratio > 0:
                         win_prob = win_rate / 100.0
                         kelly_fraction = win_prob - ((1 - win_prob) / payoff_ratio)
@@ -357,12 +344,45 @@ with tab2:
                     avg_win = avg_loss = profit_factor = payoff_ratio = best_trade = worst_trade = expectancy = 0
                     kelly_pct = half_kelly = 0
 
+                # -------------------------------------------------------------
+                # 📊 HISTORICAL ROLLING RATIO VISUALS (NEW)
+                # -------------------------------------------------------------
+                st.markdown("---")
+                st.subheader("📊 Historical Rolling Risk Analytics")
+                
+                rolling_window = periods_per_year # 12 months or 4 quarters
+                
+                if len(port_returns_series) > rolling_window:
+                    # Rolling Sharpe
+                    rolling_std = port_returns_series.rolling(window=rolling_window).std()
+                    rolling_cagr = (1 + port_returns_series).rolling(window=rolling_window).apply(np.prod, raw=True) - 1
+                    rolling_sharpe = (rolling_cagr - rf_rate) / (rolling_std * annual_factor)
+                    
+                    # Rolling Beta
+                    rolling_cov = port_returns_series.rolling(window=rolling_window).cov(benchmark_returns_series)
+                    rolling_var = benchmark_returns_series.rolling(window=rolling_window).var()
+                    rolling_beta = rolling_cov / rolling_var
+                    
+                    rolling_df = pd.DataFrame(index=dates_tracked)
+                    rolling_df['Rolling 1Y Sharpe Ratio'] = rolling_sharpe.values
+                    rolling_df['Rolling 1Y Beta'] = rolling_beta.values
+                    
+                    r_col1, r_col2 = st.columns(2)
+                    with r_col1:
+                        st.markdown("**Rolling 1-Year Sharpe Ratio**")
+                        st.line_chart(rolling_df['Rolling 1Y Sharpe Ratio'].dropna(), height=250, color="#1f77b4")
+                    with r_col2:
+                        st.markdown("**Rolling 1-Year Market Beta**")
+                        st.line_chart(rolling_df['Rolling 1Y Beta'].dropna(), height=250, color="#ff7f0e")
+                else:
+                    st.info("Not enough data points to calculate 1-year rolling historical ratios.")
+
                 st.markdown("---")
                 
                 # -------------------------------------------------------------
-                # 📊 ADVANCED ANALYTICS DASHBOARD
+                # 📊 CORE PERFORMANCE ANALYTICS
                 # -------------------------------------------------------------
-                st.subheader(f"📈 Core Performance Analytics")
+                st.subheader(f"📉 Core Performance Analytics")
                 
                 st.markdown("**1. Return & Core Risk**")
                 r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
