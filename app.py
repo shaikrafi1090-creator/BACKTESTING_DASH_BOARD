@@ -1,4 +1,87 @@
-# UI Controls
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import os
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="Pro Quant Momentum System", layout="wide")
+st.title("📈 Quantitative Momentum System")
+
+# --- LOAD SYMBOLS FROM CSV ---
+@st.cache_data
+def load_symbols():
+    file_path = "STOCK SYMBOLS (1).csv"
+    if not os.path.exists(file_path):
+        file_path = "symbols.csv"
+        
+    if os.path.exists(file_path):
+        df_symbols = pd.read_csv(file_path)
+        ticker_list = []
+        for sym in df_symbols['Symbol'].dropna():
+            sym_str = str(sym).strip()
+            if not sym_str.endswith('.NS'):
+                sym_str += '.NS'
+            ticker_list.append(sym_str)
+        return ticker_list
+    else:
+        st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'. Running with fallback tickers.")
+        return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "ITC.NS", "LT.NS"]
+
+TICKERS = load_symbols()
+BENCHMARK = "^NSEI" # Nifty 50 index
+
+st.sidebar.success(f"✅ Loaded {len(TICKERS)} stocks from CSV")
+
+# Create Tabs
+tab1, tab2 = st.tabs(["🔴 Live Momentum Scanner", "📊 Backtest & Analytics Engine"])
+
+# ==========================================
+# TAB 1: LIVE SCANNER
+# ==========================================
+with tab1:
+    st.header("Current Month Selection")
+    top_n = st.slider("Select Top N Stocks for Portfolio", min_value=3, max_value=20, value=10, key='live_n')
+    
+    if st.button("Run Live Scanner"):
+        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
+            end_date = datetime.today()
+            start_date = end_date - timedelta(days=250)
+            
+            data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
+            
+            results = []
+            for t in TICKERS:
+                if t in data.columns:
+                    series = data[t].dropna()
+                    if len(series) >= 126: 
+                        curr_price = series.iloc[-1]
+                        price_6m_ago = series.iloc[-126]
+                        roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
+                        
+                        results.append({
+                            'Stock': t.replace('.NS', ''), 
+                            'Current Price (₹)': round(curr_price, 2),
+                            '6M Return (%)': round(roc, 2), 
+                            'Momentum Score': round(roc, 2)
+                        })
+            
+            if results:
+                df = pd.DataFrame(results).sort_values(by='Momentum Score', ascending=False).reset_index(drop=True)
+                df.index += 1
+                
+                st.success(f"🏆 Top {top_n} Stocks to Buy & Hold right now:")
+                st.dataframe(df.head(top_n), use_container_width=True)
+                st.info(f"💡 **Action:** Allocate {round(100/top_n, 2)}% of your capital to each of these {top_n} stocks.")
+            else:
+                st.error("Not enough data to calculate momentum.")
+
+# ==========================================
+# TAB 2: BACKTEST & EQUITY CURVE
+# ==========================================
+with tab2:
+    # UI Controls
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         bt_top_n = st.slider("Stocks to hold", min_value=3, max_value=20, value=10, key='bt_n')
@@ -160,15 +243,245 @@
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
-            # ... (Rest of the metric calculation code remains the same) ...
+            # --- CLOSE FINAL POSITIONS ---
+            if dates_tracked:
+                final_date = dates_tracked[-1]
+                for t in list(active_positions.keys()):
+                    try:
+                        entry_date = active_positions[t]['entry_date']
+                        entry_price = active_positions[t]['entry_price']
+                        exit_price = df_daily[t].loc[:final_date].dropna().iloc[-1]
+                        
+                        days_held = (final_date - entry_date).days
+                        net_ret = ((exit_price - entry_price) / entry_price) - txn_cost_decimal
+                        
+                        completed_trades.append({
+                            'Stock': t,
+                            'Entry Date': entry_date.strftime('%Y-%m-%d'),
+                            'Entry Price (₹)': round(entry_price, 2),
+                            'Exit Date': final_date.strftime('%Y-%m-%d') + " (Active)",
+                            'Exit Price (₹)': round(exit_price, 2),
+                            'Holding Days': days_held,
+                            'Net Return (%)': round(net_ret * 100, 2)
+                        })
+                    except Exception:
+                        pass
 
-            # NEW: Add Kelly Criterion to Insight Section
-            # Add this right after calculating Win Rate and Payoff Ratio in the metrics block
-            if win_rate > 0 and payoff_ratio > 0:
-                win_prob = win_rate / 100.0
-                kelly_fraction = win_prob - ((1 - win_prob) / payoff_ratio)
-                kelly_pct = max(0, round(kelly_fraction * 100, 2))
-                half_kelly = round(kelly_pct / 2, 2)
+            # --- METRICS & PLOTS ---
+            if portfolio_returns and len(dates_tracked) > 1:
+                equity_df = pd.DataFrame(index=dates_tracked)
+                equity_df['Momentum Strategy (Net)'] = 100 * (1 + pd.Series(portfolio_returns)).cumprod().values
+                equity_df['Nifty 50 Benchmark'] = 100 * (1 + pd.Series(benchmark_returns)).cumprod().values
+                
+                st.line_chart(equity_df, height=400, color=["#00C853", "#FFA500"])
+                
+                # Base Metrics
+                final_port_val = equity_df['Momentum Strategy (Net)'].iloc[-1]
+                final_bench_val = equity_df['Nifty 50 Benchmark'].iloc[-1]
+                days_total = (dates_tracked[-1] - dates_tracked[0]).days
+                years = days_total / 365.25 if days_total > 0 else 1
+                cagr = ((final_port_val / 100) ** (1 / years)) - 1
+                bench_cagr = ((final_bench_val / 100) ** (1 / years)) - 1
+                
+                roll_max = equity_df['Momentum Strategy (Net)'].cummax()
+                drawdown = (equity_df['Momentum Strategy (Net)'] - roll_max) / roll_max
+                max_dd = drawdown.min() * 100
+                current_dd = drawdown.iloc[-1] * 100
+                
+                bench_roll_max = equity_df['Nifty 50 Benchmark'].cummax()
+                bench_drawdown = (equity_df['Nifty 50 Benchmark'] - bench_roll_max) / bench_roll_max
+                bench_max_dd = bench_drawdown.min() * 100
+                
+                # Risk Ratios (Sharpe & Sortino)
+                rf_rate = 0.06
+                port_returns_series = pd.Series(portfolio_returns)
+                benchmark_returns_series = pd.Series(benchmark_returns)
+                annual_factor = np.sqrt(periods_per_year)
+                
+                std_dev = port_returns_series.std()
+                sharpe_ratio = (cagr - rf_rate) / (std_dev * annual_factor) if std_dev != 0 else 0
+                
+                downside_returns = port_returns_series[port_returns_series < 0]
+                downside_dev = downside_returns.std() * annual_factor
+                sortino_ratio = (cagr - rf_rate) / downside_dev if downside_dev > 0 else 0
+                
+                calmar_ratio = cagr / abs(max_dd / 100) if max_dd != 0 else 0
+                
+                # === NEW ADVANCED QUANT METRICS ===
+                cov_matrix = np.cov(port_returns_series, benchmark_returns_series)
+                beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] != 0 else 0
+                alpha = cagr - (rf_rate + beta * (bench_cagr - rf_rate))
+                
+                active_returns = port_returns_series - benchmark_returns_series
+                tracking_error = active_returns.std() * annual_factor
+                info_ratio = (cagr - bench_cagr) / tracking_error if tracking_error != 0 else 0
+                
+                ulcer_index = np.sqrt((drawdown**2).mean()) * 100
+                
+                # Trade Stats
+                trades_df = pd.DataFrame(completed_trades)
+                if not trades_df.empty:
+                    total_trades = len(trades_df)
+                    avg_holding_days = int(trades_df['Holding Days'].mean())
+                    avg_trade_ret = trades_df['Net Return (%)'].mean()
+                    
+                    winning_trades = trades_df[trades_df['Net Return (%)'] > 0]
+                    losing_trades = trades_df[trades_df['Net Return (%)'] <= 0]
+                    
+                    win_rate = (len(winning_trades) / total_trades) * 100
+                    avg_win = winning_trades['Net Return (%)'].mean() if not winning_trades.empty else 0
+                    avg_loss = losing_trades['Net Return (%)'].mean() if not losing_trades.empty else 0
+                    
+                    gross_profit = winning_trades['Net Return (%)'].sum()
+                    gross_loss = abs(losing_trades['Net Return (%)'].sum())
+                    
+                    profit_factor = gross_profit / gross_loss if gross_loss != 0 else 0
+                    payoff_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+                    
+                    best_trade = trades_df['Net Return (%)'].max()
+                    worst_trade = trades_df['Net Return (%)'].min()
+                    
+                    expectancy = (win_rate / 100 * avg_win) - ((1 - win_rate / 100) * abs(avg_loss))
+                    
+                    # Kelly Criterion Calculation
+                    if win_rate > 0 and payoff_ratio > 0:
+                        win_prob = win_rate / 100.0
+                        kelly_fraction = win_prob - ((1 - win_prob) / payoff_ratio)
+                        kelly_pct = max(0, round(kelly_fraction * 100, 2))
+                        half_kelly = round(kelly_pct / 2, 2)
+                    else:
+                        kelly_pct = 0
+                        half_kelly = 0
+                else:
+                    total_trades = avg_holding_days = avg_trade_ret = win_rate = 0
+                    avg_win = avg_loss = profit_factor = payoff_ratio = best_trade = worst_trade = expectancy = 0
+                    kelly_pct = half_kelly = 0
+
+                st.markdown("---")
+                
+                # -------------------------------------------------------------
+                # 📊 ADVANCED ANALYTICS DASHBOARD
+                # -------------------------------------------------------------
+                st.subheader(f"📈 Core Performance Analytics")
+                
+                st.markdown("**1. Return & Core Risk**")
+                r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
+                r1_c1.metric("🚀 Strategy CAGR", f"{round(cagr * 100, 2)} %")
+                r1_c2.metric("📉 Strategy Max DD", f"{round(max_dd, 2)} %")
+                r1_c3.metric("⚠️ Floating Drawdown", f"{round(current_dd, 2)} %")
+                r1_c4.metric("📈 Nifty 50 CAGR", f"{round(bench_cagr * 100, 2)} %")
+                r1_c5.metric("📉 Nifty Max DD", f"{round(bench_max_dd, 2)} %")
+                
+                st.markdown("**2. Basic Risk-Adjusted Ratios**")
+                r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                r2_c1.metric("📊 Sharpe Ratio", f"{round(sharpe_ratio, 2)}")
+                r2_c2.metric("🟢 Sortino Ratio", f"{round(sortino_ratio, 2)}")
+                r2_c3.metric("🛡️ Calmar Ratio", f"{round(calmar_ratio, 2)}")
+                r2_c4.metric("⚖️ Payoff Ratio", f"{round(payoff_ratio, 2)}")
+                r2_c5.metric("💰 Profit Factor", f"{round(profit_factor, 2)}")
+                
+                st.markdown("**3. Institutional Metrics**")
+                r4_c1, r4_c2, r4_c3, r4_c4, r4_c5 = st.columns(5)
+                r4_c1.metric("🌟 Alpha (Annualized)", f"{round(alpha * 100, 2)} %")
+                r4_c2.metric("🎢 Beta", f"{round(beta, 2)}")
+                r4_c3.metric("🎯 Information Ratio", f"{round(info_ratio, 2)}")
+                r4_c4.metric("📉 Ulcer Index", f"{round(ulcer_index, 2)}")
+                r4_c5.metric("🔮 Expectancy", f"{round(expectancy, 2)} %")
+
+                st.markdown("**4. Trade Execution Stats**")
+                r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
+                r3_c1.metric("🎯 Win Rate", f"{round(win_rate, 1)} %")
+                r3_c2.metric("📈 Avg Win", f"+{round(avg_win, 2)} %")
+                r3_c3.metric("📉 Avg Loss", f"{round(avg_loss, 2)} %")
+                r3_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
+                r3_c5.metric("🔄 Total Trades", f"{total_trades}")
+                
+                # -------------------------------------------------------------
+                # 🧠 AUTOMATED STRATEGY INSIGHTS
+                # -------------------------------------------------------------
+                st.markdown("---")
+                st.subheader("🧠 Automated Strategy Insights")
+                
+                if expectancy > 0:
+                    st.markdown(f"✅ **Positive Expectancy:** The system has a positive statistical edge, expected to yield **{round(expectancy, 2)}%** per trade on average.")
+                else:
+                    st.markdown(f"❌ **Negative Expectancy:** The system loses **{round(expectancy, 2)}%** per trade on average.")
+
+                if win_rate < 50 and payoff_ratio > 2:
+                    st.markdown(f"⚖️ **Asymmetrical Payoff:** With a sub-50% win rate (**{round(win_rate, 1)}%**) but a payoff ratio of **{round(payoff_ratio, 2)}**, this is a classic trend-following profile.")
+
+                if kelly_pct > 0:
+                    st.markdown(f"📐 **Kelly Position Sizing:** Mathematically, the full Kelly fraction suggests allocating **{kelly_pct}%** of your bankroll per trade, but to optimize for drawdowns, professional standard practice dictates utilizing Half-Kelly sizing at **{half_kelly}%** per position.")
+
+                if max_dd < -30 and not use_regime_filter:
+                    st.markdown(f"⚠️ **High Tail-Risk:** A historical max drawdown of **{round(max_dd, 2)}%** is severe. Enabling the 200-DMA Regime Filter is highly recommended.")
+                elif use_regime_filter:
+                    st.markdown(f"🛡️ **Regime Filter Active:** Capital preservation during macro bear markets is enforced by automatically exiting to cash when the Nifty 50 falls below its 200-day moving average.")
+
+                # -------------------------------------------------------------
+                # 🗓️ MONTHLY RETURNS HEATMAP
+                # -------------------------------------------------------------
+                st.markdown("---")
+                st.subheader("🗓️ Periodic Returns Heatmap")
+                
+                monthly_df = pd.DataFrame({
+                    'Date': dates_tracked,
+                    'Return (%)': [r * 100 for r in portfolio_returns]
+                })
+                monthly_df['Year'] = monthly_df['Date'].dt.year
+                monthly_df['Month'] = monthly_df['Date'].dt.strftime('%b')
+                
+                heatmap_df = monthly_df.pivot_table(index='Year', columns='Month', values='Return (%)', aggfunc='sum')
+                months_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+                heatmap_df = heatmap_df.reindex(columns=[m for m in months_order if m in heatmap_df.columns])
+                
+                st.dataframe(heatmap_df.style.format("{:.2f}").background_gradient(cmap='RdYlGn', axis=None), use_container_width=True)
+                
+                # -------------------------------------------------------------
+                # 🔄 NON-OVERLAPPING SUB-PERIOD ANALYSIS
+                # -------------------------------------------------------------
+                st.markdown("---")
+                st.subheader(f"📅 Non-Overlapping Sub-Period Analysis ({chunk_years}-Year Blocks)")
+                
+                chunk_days = int(chunk_years * 365.25)
+                chunk_data = []
+                start_idx = 0
+                
+                while start_idx < len(equity_df):
+                    start_date = equity_df.index[start_idx]
+                    target_end_date = start_date + timedelta(days=chunk_days)
+                    chunk_df = equity_df.loc[start_date:target_end_date]
+                    
+                    if len(chunk_df) > 1:
+                        actual_end_date = chunk_df.index[-1]
+                        strat_ret = (chunk_df['Momentum Strategy (Net)'].iloc[-1] / chunk_df['Momentum Strategy (Net)'].iloc[0] - 1) * 100
+                        bench_ret = (chunk_df['Nifty 50 Benchmark'].iloc[-1] / chunk_df['Nifty 50 Benchmark'].iloc[0] - 1) * 100
+                        strat_dd = ((chunk_df['Momentum Strategy (Net)'] - chunk_df['Momentum Strategy (Net)'].cummax()) / chunk_df['Momentum Strategy (Net)'].cummax()).min() * 100
+                        bench_dd = ((chunk_df['Nifty 50 Benchmark'] - chunk_df['Nifty 50 Benchmark'].cummax()) / chunk_df['Nifty 50 Benchmark'].cummax()).min() * 100
+                        
+                        chunk_data.append({
+                            "Time Period": f"{start_date.strftime('%b %Y')} - {actual_end_date.strftime('%b %Y')}",
+                            "Strategy Return (%)": round(strat_ret, 2),
+                            "Nifty 50 Return (%)": round(bench_ret, 2),
+                            "Strategy Max DD (%)": round(strat_dd, 2),
+                            "Nifty Max DD (%)": round(bench_dd, 2)
+                        })
+                        
+                    next_indices = np.where(equity_df.index > target_end_date)[0]
+                    if len(next_indices) > 0:
+                        start_idx = next_indices[0]
+                    else:
+                        break
+                
+                if chunk_data:
+                    chunk_df_final = pd.DataFrame(chunk_data)
+                    st.dataframe(chunk_df_final.style.highlight_max(subset=['Strategy Return (%)'], color='lightgreen')
+                                                .highlight_min(subset=['Strategy Max DD (%)'], color='lightcoral'), 
+                                 use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("📝 Per Script Total Returns & Trade Log")
+                with st.expander("Click to View Complete Trade History"):
+                    st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
             else:
-                kelly_pct = 0
-                half_kelly = 0
+                st.error("Backtest failed. Not enough historical data.")
