@@ -9,7 +9,7 @@ import os
 st.set_page_config(page_title="Pro Quant Momentum System", layout="wide")
 st.title("📈 Quantitative Momentum System")
 
-# --- LOAD SYMBOLS FROM CSV ---
+# --- DATA CACHING & LOADERS ---
 @st.cache_data
 def load_symbols():
     file_path = "STOCK SYMBOLS (1).csv"
@@ -29,6 +29,12 @@ def load_symbols():
         st.warning("CSV file not found! Please upload 'STOCK SYMBOLS (1).csv'. Running with fallback tickers.")
         return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "ITC.NS", "LT.NS"]
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market_data(tickers, start, end):
+    """Caches yfinance data in memory for 1 hour to prevent redundant API calls."""
+    data = yf.download(tickers, start=start, end=end, progress=False)['Close']
+    return data
+
 TICKERS = load_symbols()
 BENCHMARK = "^NSEI" # Nifty 50 index
 
@@ -38,48 +44,44 @@ st.sidebar.success(f"✅ Loaded {len(TICKERS)} stocks from CSV")
 tab1, tab2 = st.tabs(["🔴 Live Momentum Scanner", "📊 Backtest & Analytics Engine"])
 
 # ==========================================
-# TAB 1: LIVE SCANNER
+# TAB 1: LIVE SCANNER (Vectorized)
 # ==========================================
 with tab1:
     st.header("Current Month Selection")
     top_n = st.slider("Select Top N Stocks for Portfolio", min_value=3, max_value=20, value=10, key='live_n')
     
     if st.button("Run Live Scanner"):
-        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks. This might take a minute..."):
+        with st.spinner(f"Fetching latest data for {len(TICKERS)} stocks..."):
             end_date = datetime.today()
             start_date = end_date - timedelta(days=250)
             
-            data = yf.download(TICKERS, start=start_date, end=end_date, progress=False)['Close']
+            data = fetch_market_data(TICKERS, start=start_date, end=end_date)
             
-            results = []
-            for t in TICKERS:
-                if t in data.columns:
-                    series = data[t].dropna()
-                    if len(series) >= 126: 
-                        curr_price = series.iloc[-1]
-                        price_6m_ago = series.iloc[-126]
-                        roc = ((curr_price - price_6m_ago) / price_6m_ago) * 100
-                        
-                        results.append({
-                            'Stock': t.replace('.NS', ''), 
-                            'Current Price (₹)': round(curr_price, 2),
-                            '6M Return (%)': round(roc, 2), 
-                            'Momentum Score': round(roc, 2)
-                        })
+            # Vectorized O(1) logic: drop missing data, grab exact dates, calc matrix
+            data_valid = data.dropna(axis=1, thresh=126)
             
-            if results:
-                df = pd.DataFrame(results).sort_values(by='Momentum Score', ascending=False).reset_index(drop=True)
+            if not data_valid.empty and len(data_valid) >= 126:
+                curr_prices = data_valid.iloc[-1]
+                prices_6m_ago = data_valid.iloc[-126]
+                
+                roc = ((curr_prices - prices_6m_ago) / prices_6m_ago) * 100
+                
+                df = pd.DataFrame({
+                    'Stock': data_valid.columns.str.replace('.NS', ''),
+                    'Current Price (₹)': curr_prices.round(2),
+                    '6M Return (%)': roc.round(2),
+                    'Momentum Score': roc.round(2)
+                }).sort_values(by='Momentum Score', ascending=False).reset_index(drop=True)
                 df.index += 1
                 
                 st.success(f"🏆 Top {top_n} Stocks to Buy & Hold right now:")
                 st.dataframe(df.head(top_n), use_container_width=True)
                 st.info(f"💡 **Action:** Allocate {round(100/top_n, 2)}% of your capital to each of these {top_n} stocks.")
             else:
-                st.error("Not enough data to calculate momentum.")
+                st.error("Not enough data to calculate momentum. Try again later.")
 
 # ==========================================
-# ==========================================
-# TAB 2: BACKTEST & EQUITY CURVE
+# TAB 2: BACKTEST & EQUITY CURVE (O(1) Matrix Pre-Computation)
 # ==========================================
 with tab2:
     # UI Controls
@@ -105,7 +107,7 @@ with tab2:
     st.header(f"Momentum Strategy vs Nifty 50 ({backtest_period} Engine)")
     
     if st.button("Run Backtest & Plot Analytics"):
-        with st.spinner(f"Simulating {rebalance_freq} rebalancing for the LAST {backtest_period.upper()}. Fetching data..."):
+        with st.spinner(f"Simulating {rebalance_freq} rebalancing... Pre-computing matrices..."):
             
             years_map = {"3 Years": 3, "5 Years": 5, "9 Years": 9, "10 Years": 10, "15 Years": 15}
             selected_years = years_map[backtest_period]
@@ -114,12 +116,19 @@ with tab2:
             start = end - timedelta(days=(365 * selected_years) + 365) 
             
             all_tickers = TICKERS + [BENCHMARK]
-            df_daily = yf.download(all_tickers, start=start, end=end, progress=False)['Close']
+            df_daily = fetch_market_data(all_tickers, start=start, end=end)
             
+            # --- O(1) MATRIX PRE-COMPUTATION ---
             if BENCHMARK in df_daily.columns:
                 df_daily['NIFTY_200_DMA'] = df_daily[BENCHMARK].rolling(window=200).mean()
+                df_daily['Bull_Regime'] = df_daily[BENCHMARK] >= df_daily['NIFTY_200_DMA']
+            else:
+                df_daily['Bull_Regime'] = True # Fallback if benchmark missing
             
-            monthly_dates = pd.DatetimeIndex(df_daily.index.to_series().groupby(df_daily.index.to_period('M')).first().values)
+            # Resample to monthly to extract month-end evaluation dates instantly
+            monthly_prices = df_daily.resample('ME').last()
+            monthly_momentum = monthly_prices.pct_change(periods=6)
+            monthly_regime = df_daily['Bull_Regime'].resample('ME').last()
             
             portfolio_returns = []
             benchmark_returns = []
@@ -133,53 +142,38 @@ with tab2:
             
             step = 1 if rebalance_freq == "Monthly" else 3
             periods_per_year = 12 if rebalance_freq == "Monthly" else 4
-            start_index = 12 
+            start_index = 6 # Start after 6 months of data is available for ROC
             
-            for i in range(start_index, len(monthly_dates) - step, step):
-                eval_date = monthly_dates[i]
-                start_lookback = monthly_dates[i-6]
-                next_rebalance_date = monthly_dates[i+step]
+            # Vectorized Loop Execution
+            for i in range(start_index, len(monthly_prices) - step, step):
+                eval_date = monthly_prices.index[i]
+                next_rebalance_date = monthly_prices.index[i+step]
                 
-                is_bull_regime = True
-                if use_regime_filter:
-                    try:
-                        current_nifty = df_daily[BENCHMARK].loc[:eval_date].dropna().iloc[-1]
-                        current_dma = df_daily['NIFTY_200_DMA'].loc[:eval_date].dropna().iloc[-1]
-                        if current_nifty < current_dma:
-                            is_bull_regime = False
-                    except:
-                        pass
+                is_bull_regime = monthly_regime.loc[eval_date] if use_regime_filter else True
                 
                 scores = {}
                 ranked_stocks = []
                 
+                # O(1) Cross-sectional ranking lookup
                 if is_bull_regime:
-                    for t in TICKERS:
-                        if t in df_daily.columns and t != 'NIFTY_200_DMA':
-                            p_eval = df_daily[t].loc[:eval_date].dropna()
-                            p_start = df_daily[t].loc[:start_lookback].dropna()
-                            
-                            if len(p_eval) > 0 and len(p_start) > 0:
-                                curr_price = p_eval.iloc[-1]
-                                old_price = p_start.iloc[-1]
-                                roc = (curr_price - old_price) / old_price
-                                scores[t] = roc
-                    
+                    scores_row = monthly_momentum.loc[eval_date].dropna()
+                    scores_row = scores_row.drop(labels=[BENCHMARK, 'NIFTY_200_DMA', 'Bull_Regime'], errors='ignore')
+                    scores = scores_row.to_dict()
                     if scores:
                         ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
+                # Process Sells
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
-                        try:
-                            entry_date = active_positions[t]['entry_date']
-                            entry_price = active_positions[t]['entry_price']
-                            exit_price = df_daily[t].loc[:eval_date].dropna().iloc[-1]
-                            
+                        entry_date = active_positions[t]['entry_date']
+                        entry_price = active_positions[t]['entry_price']
+                        exit_price = monthly_prices.loc[eval_date, t]
+                        
+                        if pd.notna(exit_price):
                             days_held = (eval_date - entry_date).days
                             net_ret = ((exit_price - entry_price) / entry_price) - txn_cost_decimal
-                            
                             completed_trades.append({
-                                'Stock': t,
+                                'Stock': t.replace('.NS', ''),
                                 'Entry Date': entry_date.strftime('%Y-%m-%d'),
                                 'Entry Price (₹)': round(entry_price, 2),
                                 'Exit Date': eval_date.strftime('%Y-%m-%d'),
@@ -187,36 +181,29 @@ with tab2:
                                 'Holding Days': days_held,
                                 'Net Return (%)': round(net_ret * 100, 2)
                             })
-                        except Exception:
-                            pass
                         del active_positions[t]
                 
+                # Process Buys
                 for t in ranked_stocks:
                     if t not in active_positions:
-                        try:
-                            entry_price = df_daily[t].loc[:eval_date].dropna().iloc[-1]
+                        entry_price = monthly_prices.loc[eval_date, t]
+                        if pd.notna(entry_price):
                             active_positions[t] = {'entry_date': eval_date, 'entry_price': entry_price}
-                        except Exception:
-                            pass
 
+                # Compute Forward Period Returns
                 port_period_ret = 0
                 if is_bull_regime:
                     valid_stocks = 0
                     for t in ranked_stocks:
-                        try:
-                            buy_price = df_daily[t].loc[:eval_date].dropna().iloc[-1]
-                            sell_price = df_daily[t].loc[:next_rebalance_date].dropna().iloc[-1]
+                        buy_price = monthly_prices.loc[eval_date, t]
+                        sell_price = monthly_prices.loc[next_rebalance_date, t]
+                        
+                        if pd.notna(buy_price) and pd.notna(sell_price) and buy_price > 0:
                             gross_ret = (sell_price - buy_price) / buy_price
-                            
-                            if t not in previous_ranked_stocks:
-                                net_ret = gross_ret - txn_cost_decimal
-                            else:
-                                net_ret = gross_ret
-                                
+                            # Only apply txn cost if newly bought
+                            net_ret = gross_ret - txn_cost_decimal if t not in previous_ranked_stocks else gross_ret
                             port_period_ret += net_ret
                             valid_stocks += 1
-                        except Exception:
-                            pass
                     
                     if valid_stocks > 0:
                         port_period_ret = port_period_ret / valid_stocks
@@ -225,29 +212,30 @@ with tab2:
 
                 portfolio_returns.append(port_period_ret)
                 
-                try:
-                    bench_buy = df_daily[BENCHMARK].loc[:eval_date].dropna().iloc[-1]
-                    bench_sell = df_daily[BENCHMARK].loc[:next_rebalance_date].dropna().iloc[-1]
+                # Benchmark Return
+                bench_buy = monthly_prices.loc[eval_date, BENCHMARK]
+                bench_sell = monthly_prices.loc[next_rebalance_date, BENCHMARK]
+                if pd.notna(bench_buy) and pd.notna(bench_sell) and bench_buy > 0:
                     benchmark_returns.append((bench_sell - bench_buy) / bench_buy)
-                except Exception:
+                else:
                     benchmark_returns.append(0)
                 
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
+            # Process Open Trades at the end
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
-                    try:
-                        entry_date = active_positions[t]['entry_date']
-                        entry_price = active_positions[t]['entry_price']
-                        exit_price = df_daily[t].loc[:final_date].dropna().iloc[-1]
-                        
+                    entry_date = active_positions[t]['entry_date']
+                    entry_price = active_positions[t]['entry_price']
+                    exit_price = monthly_prices.loc[final_date, t]
+                    
+                    if pd.notna(exit_price):
                         days_held = (final_date - entry_date).days
                         net_ret = ((exit_price - entry_price) / entry_price) - txn_cost_decimal
-                        
                         completed_trades.append({
-                            'Stock': t,
+                            'Stock': t.replace('.NS', ''),
                             'Entry Date': entry_date.strftime('%Y-%m-%d'),
                             'Entry Price (₹)': round(entry_price, 2),
                             'Exit Date': final_date.strftime('%Y-%m-%d') + " (Active)",
@@ -255,8 +243,6 @@ with tab2:
                             'Holding Days': days_held,
                             'Net Return (%)': round(net_ret * 100, 2)
                         })
-                    except Exception:
-                        pass
 
             # --- METRICS & PLOTS ---
             if portfolio_returns and len(dates_tracked) > 1:
@@ -345,7 +331,7 @@ with tab2:
                     kelly_pct = half_kelly = 0
 
                 # -------------------------------------------------------------
-                # 📊 HISTORICAL ROLLING RATIO VISUALS (NEW)
+                # 📊 HISTORICAL ROLLING RATIO VISUALS
                 # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader("📊 Historical Rolling Risk Analytics")
@@ -353,12 +339,10 @@ with tab2:
                 rolling_window = periods_per_year # 12 months or 4 quarters
                 
                 if len(port_returns_series) > rolling_window:
-                    # Rolling Sharpe
                     rolling_std = port_returns_series.rolling(window=rolling_window).std()
                     rolling_cagr = (1 + port_returns_series).rolling(window=rolling_window).apply(np.prod, raw=True) - 1
                     rolling_sharpe = (rolling_cagr - rf_rate) / (rolling_std * annual_factor)
                     
-                    # Rolling Beta
                     rolling_cov = port_returns_series.rolling(window=rolling_window).cov(benchmark_returns_series)
                     rolling_var = benchmark_returns_series.rolling(window=rolling_window).var()
                     rolling_beta = rolling_cov / rolling_var
@@ -504,4 +488,4 @@ with tab2:
                 with st.expander("Click to View Complete Trade History"):
                     st.dataframe(trades_df.sort_values(by='Entry Date', ascending=False), use_container_width=True)
             else:
-                st.error("Backtest failed. Not enough historical data.")
+                st.error("Backtest failed. Not enough historical data to generate an equity curve.")
