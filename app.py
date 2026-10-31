@@ -57,7 +57,6 @@ with tab1:
             
             data = fetch_market_data(TICKERS, start=start_date, end=end_date)
             
-            # Vectorized O(1) logic: drop missing data, grab exact dates, calc matrix
             data_valid = data.dropna(axis=1, thresh=126)
             
             if not data_valid.empty and len(data_valid) >= 126:
@@ -81,10 +80,9 @@ with tab1:
                 st.error("Not enough data to calculate momentum. Try again later.")
 
 # ==========================================
-# TAB 2: BACKTEST & EQUITY CURVE (O(1) Matrix Pre-Computation)
+# TAB 2: BACKTEST & EQUITY CURVE 
 # ==========================================
 with tab2:
-    # UI Controls
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         bt_top_n = st.slider("Stocks to hold", min_value=3, max_value=20, value=10, key='bt_n')
@@ -97,7 +95,6 @@ with tab2:
     with col5:
         chunk_years = st.slider("Split Breakdown (Yrs)", min_value=1, max_value=5, value=3)
 
-    # Advanced Strategy Overlays
     col6, col7 = st.columns(2)
     with col6:
         use_regime_filter = st.checkbox("🛡️ Enable Market Regime Filter (Exit to Cash if Nifty < 200 DMA)", value=True)
@@ -123,16 +120,13 @@ with tab2:
                 df_daily['NIFTY_200_DMA'] = df_daily[BENCHMARK].rolling(window=200).mean()
                 df_daily['Bull_Regime'] = df_daily[BENCHMARK] >= df_daily['NIFTY_200_DMA']
             else:
-                df_daily['Bull_Regime'] = True # Fallback if benchmark missing
+                df_daily['Bull_Regime'] = True 
             
-           # 1. Resample to monthly to extract month-end evaluation dates instantly
-                monthly_prices = df_daily.resample('ME').last()
-
-# 2. Replace zeroes with NaN to prevent division errors
-                monthly_prices = monthly_prices.replace(0.0, np.nan)
-
-# 3. Safely calculate 6-month momentum
-                monthly_momentum = monthly_prices.pct_change(periods=6)
+            monthly_prices = df_daily.resample('ME').last()
+            # CRITICAL FIX: Replace zeros with NaN to prevent ZeroDivisionError
+            monthly_prices = monthly_prices.replace(0.0, np.nan)
+            monthly_momentum = monthly_prices.pct_change(periods=6)
+            monthly_regime = df_daily['Bull_Regime'].resample('ME').last()
             
             portfolio_returns = []
             benchmark_returns = []
@@ -146,9 +140,9 @@ with tab2:
             
             step = 1 if rebalance_freq == "Monthly" else 3
             periods_per_year = 12 if rebalance_freq == "Monthly" else 4
-            start_index = 6 # Start after 6 months of data is available for ROC
+            start_index = 6 
             
-            # Vectorized Loop Execution
+            # CRITICAL FIX: Correctly indented backtest loop
             for i in range(start_index, len(monthly_prices) - step, step):
                 eval_date = monthly_prices.index[i]
                 next_rebalance_date = monthly_prices.index[i+step]
@@ -158,7 +152,6 @@ with tab2:
                 scores = {}
                 ranked_stocks = []
                 
-                # O(1) Cross-sectional ranking lookup
                 if is_bull_regime:
                     scores_row = monthly_momentum.loc[eval_date].dropna()
                     scores_row = scores_row.drop(labels=[BENCHMARK, 'NIFTY_200_DMA', 'Bull_Regime'], errors='ignore')
@@ -166,7 +159,6 @@ with tab2:
                     if scores:
                         ranked_stocks = sorted(scores, key=scores.get, reverse=True)[:bt_top_n]
                 
-                # Process Sells
                 for t in list(active_positions.keys()):
                     if t not in ranked_stocks:
                         entry_date = active_positions[t]['entry_date']
@@ -187,14 +179,12 @@ with tab2:
                             })
                         del active_positions[t]
                 
-                # Process Buys
                 for t in ranked_stocks:
                     if t not in active_positions:
                         entry_price = monthly_prices.loc[eval_date, t]
                         if pd.notna(entry_price):
                             active_positions[t] = {'entry_date': eval_date, 'entry_price': entry_price}
 
-                # Compute Forward Period Returns
                 port_period_ret = 0
                 if is_bull_regime:
                     valid_stocks = 0
@@ -204,7 +194,6 @@ with tab2:
                         
                         if pd.notna(buy_price) and pd.notna(sell_price) and buy_price > 0:
                             gross_ret = (sell_price - buy_price) / buy_price
-                            # Only apply txn cost if newly bought
                             net_ret = gross_ret - txn_cost_decimal if t not in previous_ranked_stocks else gross_ret
                             port_period_ret += net_ret
                             valid_stocks += 1
@@ -216,7 +205,6 @@ with tab2:
 
                 portfolio_returns.append(port_period_ret)
                 
-                # Benchmark Return
                 bench_buy = monthly_prices.loc[eval_date, BENCHMARK]
                 bench_sell = monthly_prices.loc[next_rebalance_date, BENCHMARK]
                 if pd.notna(bench_buy) and pd.notna(bench_sell) and bench_buy > 0:
@@ -227,7 +215,6 @@ with tab2:
                 dates_tracked.append(next_rebalance_date)
                 previous_ranked_stocks = ranked_stocks
 
-            # Process Open Trades at the end
             if dates_tracked:
                 final_date = dates_tracked[-1]
                 for t in list(active_positions.keys()):
@@ -334,13 +321,10 @@ with tab2:
                     avg_win = avg_loss = profit_factor = payoff_ratio = best_trade = worst_trade = expectancy = 0
                     kelly_pct = half_kelly = 0
 
-                # -------------------------------------------------------------
-                # 📊 HISTORICAL ROLLING RATIO VISUALS
-                # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader("📊 Historical Rolling Risk Analytics")
                 
-                rolling_window = periods_per_year # 12 months or 4 quarters
+                rolling_window = periods_per_year 
                 
                 if len(port_returns_series) > rolling_window:
                     rolling_std = port_returns_series.rolling(window=rolling_window).std()
@@ -367,9 +351,6 @@ with tab2:
 
                 st.markdown("---")
                 
-                # -------------------------------------------------------------
-                # 📊 CORE PERFORMANCE ANALYTICS
-                # -------------------------------------------------------------
                 st.subheader(f"📉 Core Performance Analytics")
                 
                 st.markdown("**1. Return & Core Risk**")
@@ -404,9 +385,6 @@ with tab2:
                 r3_c4.metric("🏆 Best Trade", f"+{round(best_trade, 2)} %")
                 r3_c5.metric("🔄 Total Trades", f"{total_trades}")
                 
-                # -------------------------------------------------------------
-                # 🧠 AUTOMATED STRATEGY INSIGHTS
-                # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader("🧠 Automated Strategy Insights")
                 
@@ -426,9 +404,6 @@ with tab2:
                 elif use_regime_filter:
                     st.markdown(f"🛡️ **Regime Filter Active:** Capital preservation during macro bear markets is enforced by automatically exiting to cash when the Nifty 50 falls below its 200-day moving average.")
 
-                # -------------------------------------------------------------
-                # 🗓️ MONTHLY RETURNS HEATMAP
-                # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader("🗓️ Periodic Returns Heatmap")
                 
@@ -445,9 +420,6 @@ with tab2:
                 
                 st.dataframe(heatmap_df.style.format("{:.2f}").background_gradient(cmap='RdYlGn', axis=None), use_container_width=True)
                 
-                # -------------------------------------------------------------
-                # 🔄 NON-OVERLAPPING SUB-PERIOD ANALYSIS
-                # -------------------------------------------------------------
                 st.markdown("---")
                 st.subheader(f"📅 Non-Overlapping Sub-Period Analysis ({chunk_years}-Year Blocks)")
                 
