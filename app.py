@@ -125,10 +125,14 @@ with tab2:
             else:
                 df_daily['Bull_Regime'] = True # Fallback if benchmark missing
             
-            # Resample to monthly to extract month-end evaluation dates instantly
-            monthly_prices = df_daily.resample('ME').last()
-            monthly_momentum = monthly_prices.pct_change(periods=6)
-            monthly_regime = df_daily['Bull_Regime'].resample('ME').last()
+           # 1. Resample to monthly to extract month-end evaluation dates instantly
+monthly_prices = df_daily.resample('ME').last()
+
+# 2. Replace zeroes with NaN to prevent division errors
+monthly_prices = monthly_prices.replace(0.0, np.nan)
+
+# 3. Safely calculate 6-month momentum
+monthly_momentum = monthly_prices.pct_change(periods=6)
             
             portfolio_returns = []
             benchmark_returns = []
