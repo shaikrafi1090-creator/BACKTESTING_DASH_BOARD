@@ -123,6 +123,12 @@ with tab2:
                 df_daily['Bull_Regime'] = True 
             
             monthly_prices = df_daily.resample('ME').last()
+            
+            # CRITICAL FIX: Robust mathematical mask instead of exact text replacement
+            monthly_prices = monthly_prices.where(monthly_prices > 0)
+            
+            monthly_momentum = monthly_prices.pct_change(periods=6)
+            monthly_regime = df_daily['Bull_Regime'].resample('ME').last()
             # CRITICAL FIX: Replace zeros with NaN to prevent ZeroDivisionError
             monthly_prices = monthly_prices.replace(0.0, np.nan)
             monthly_momentum = monthly_prices.pct_change(periods=6)
